@@ -1,0 +1,4 @@
+export class ApiError extends Error { constructor(message: string, public code?: string, public details?: unknown) { super(message); } }
+function csrf() { return document.cookie.split("; ").find(x => x.startsWith("csrf-token="))?.split("=")[1] ?? ""; }
+export async function api<T>(path: string, options: RequestInit = {}): Promise<T> { const response = await fetch(`/api/v1${path}`, { credentials: "include", ...options, headers: { "Content-Type": "application/json", ...(options.method && !["GET","HEAD"].includes(options.method) ? { "x-csrf-token": csrf() } : {}), ...options.headers } }); const json = await response.json().catch(() => ({})); if (!response.ok) throw new ApiError(json.error?.message ?? "Request failed", json.error?.code, json.error?.details); return json.data as T; }
+export const json = (method: string, body?: unknown): RequestInit => ({ method, body: body === undefined ? undefined : JSON.stringify(body) });

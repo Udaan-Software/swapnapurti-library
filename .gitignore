@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+backend/uploads/*
+!backend/uploads/.gitkeep
+desktop/release/
+desktop/runtime/
+playwright-report/
+test-results/
+backups/
+.DS_Store
+Thumbs.db

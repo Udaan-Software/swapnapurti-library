@@ -1,0 +1,25 @@
+{
+  "name": "@swapnapurti/desktop",
+  "version": "1.0.6",
+  "private": true,
+  "description": "Swapnapurti Library desktop application",
+  "author": "Swapnapurti Library",
+  "main": "main.cjs",
+  "scripts": { "dev": "electron .", "build": "node -e \"console.log('Desktop shell ready')\"", "package": "node ../scripts/prepare-desktop.mjs && electron-builder --win portable" },
+  "dependencies": { "adm-zip": "^0.5.16", "electron-updater": "^6.6.2" },
+  "devDependencies": { "electron": "39.8.10", "electron-builder": "^26.0.12", "wait-on": "^9.0.1" },
+  "build": {
+    "appId": "in.swapnapurti.library",
+    "productName": "Swapnapurti Library",
+    "compression": "normal",
+    "directories": { "output": "release" },
+    "files": ["main.cjs", "preload.cjs", "package.json"],
+    "extraResources": [
+      { "from": "../frontend/dist", "to": "frontend/dist" },
+      { "from": "runtime/backend-runtime.zip", "to": "backend-runtime.zip" },
+      { "from": "../docker-compose.yml", "to": "docker-compose.yml" }
+    ],
+    "win": { "target": "portable" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "createStartMenuShortcut": true }
+  }
+}

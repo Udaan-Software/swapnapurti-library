@@ -1,0 +1,25 @@
+{
+  "name": "swapnapurti-library",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["frontend", "backend", "desktop"],
+  "scripts": {
+    "dev": "node scripts/start.mjs",
+    "start": "node scripts/start.mjs --desktop",
+    "web": "node scripts/start.mjs --web",
+    "build": "npm run build --workspace backend && npm run build --workspace frontend && npm run build --workspace desktop",
+    "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "lint": "npm run lint --workspace backend && npm run lint --workspace frontend",
+    "db:up": "docker compose up -d database",
+    "db:down": "docker compose down",
+    "db:migrate": "npm run db:migrate --workspace backend",
+    "db:seed": "npm run db:seed --workspace backend",
+    "desktop:package": "npm run package --workspace desktop",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/restore.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": { "node": ">=22" }
+}

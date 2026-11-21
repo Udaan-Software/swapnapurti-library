@@ -1,0 +1,21 @@
+{
+  "name": "swapnapurti-backend-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@prisma/client": "6.19.3",
+    "bcryptjs": "3.0.3",
+    "cookie-parser": "1.4.7",
+    "cors": "2.8.5",
+    "date-fns": "4.1.0",
+    "dotenv": "17.2.3",
+    "express": "5.1.0",
+    "express-rate-limit": "8.2.1",
+    "helmet": "8.1.0",
+    "pino": "10.1.0",
+    "pino-http": "11.0.0",
+    "prisma": "6.19.3",
+    "zod": "4.1.12"
+  }
+}
