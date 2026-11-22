@@ -224,6 +224,7 @@ model Subscription {
   plan              MembershipPlan     @relation(fields: [planId], references: [id])
   renewedFrom       Subscription?      @relation("SubscriptionRenewal", fields: [renewalReference], references: [id])
   renewals          Subscription[]     @relation("SubscriptionRenewal")
+  invoice           Invoice?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   @@index([memberId, status, endDate])
@@ -430,11 +431,13 @@ model Invoice {
   id          String        @id @default(uuid()) @db.Uuid
   invoiceNo   String        @unique
   memberId    String        @db.Uuid
+  subscriptionId String?    @unique @db.Uuid
   status      InvoiceStatus @default(ISSUED)
   total       Decimal       @db.Decimal(12, 2)
   paid        Decimal       @default(0) @db.Decimal(12, 2)
   dueDate     DateTime?     @db.Date
   member      Member        @relation(fields: [memberId], references: [id])
+  subscription Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
   items       InvoiceItem[]
   allocations PaymentAllocation[]
   createdAt   DateTime      @default(now())

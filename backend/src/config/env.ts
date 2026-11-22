@@ -8,6 +8,7 @@ const schema = z.object({
   FRONTEND_URL: z.string().default("http://localhost:5173"),
   SESSION_COOKIE_NAME: z.string().default("swapnapurti_session"),
   SESSION_DAYS: z.coerce.number().int().positive().default(7),
+  LIBRARY_TIMEZONE: z.string().default("Asia/Kolkata"),
   ADMIN_SETUP_EMAIL: z.string().email().optional(),
   ADMIN_SETUP_PASSWORD: z.string().min(12).optional()
 });

@@ -1,6 +1,8 @@
 import { AllocationStatus, NotificationType, SeatStatus } from "@prisma/client";
 import { addDays, differenceInCalendarDays, format } from "date-fns";
 import { prisma } from "../config/prisma.js";
+import { env } from "../config/env.js";
+import { dateInTimeZone } from "./rules.js";
 
 function reminderDays(value: unknown) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return 3;
@@ -9,7 +11,12 @@ function reminderDays(value: unknown) {
 }
 
 export async function syncSeatAllocationNotifications(now = new Date()) {
-  const today = new Date(now); today.setHours(0, 0, 0, 0);
+  const today = dateInTimeZone(now, env.LIBRARY_TIMEZONE);
+  const starting = await prisma.seatAllocation.findMany({ where: { status: AllocationStatus.UPCOMING, startDate: { lte: today }, endDate: { gte: today } }, select: { id: true, seatId: true } });
+  if (starting.length) await prisma.$transaction(async tx => {
+    await tx.seatAllocation.updateMany({ where: { id: { in: starting.map(item => item.id) }, status: AllocationStatus.UPCOMING }, data: { status: AllocationStatus.ACTIVE } });
+    await tx.seat.updateMany({ where: { id: { in: [...new Set(starting.map(item => item.seatId))] }, active: true, status: SeatStatus.AVAILABLE }, data: { status: SeatStatus.ALLOCATED } });
+  });
   const settings = await prisma.appSetting.findUnique({ where: { key: "notifications" } });
   const days = reminderDays(settings?.value);
   const reminderEnd = addDays(today, days);
@@ -20,10 +27,9 @@ export async function syncSeatAllocationNotifications(now = new Date()) {
   for (const allocation of expiring) {
     const remaining = differenceInCalendarDays(allocation.endDate, today);
     const timing = remaining === 0 ? "ends today" : `ends in ${remaining} day${remaining === 1 ? "" : "s"}`;
-    await prisma.notification.upsert({
-      where: { dedupeKey: `seat-expiring:${allocation.id}:${format(allocation.endDate, "yyyy-MM-dd")}` },
-      update: {},
-      create: {
+    await prisma.notification.createMany({
+      skipDuplicates: true,
+      data: {
         dedupeKey: `seat-expiring:${allocation.id}:${format(allocation.endDate, "yyyy-MM-dd")}`,
         memberId: allocation.memberId,
         type: NotificationType.SEAT_EXPIRING,
@@ -60,7 +66,7 @@ export async function syncSeatAllocationNotifications(now = new Date()) {
       });
     });
   }
-  return { expiring: expiring.length, expired: expired.length };
+  return { activated: starting.length, expiring: expiring.length, expired: expired.length };
 }
 
 export function startReminderJobs() {

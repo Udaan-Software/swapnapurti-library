@@ -4,6 +4,9 @@ import { z } from "zod";
 import { prisma } from "../../config/prisma.js";
 import { asyncHandler, AppError, ok, pageParams } from "../../utils/http.js";
 import { audit } from "../../services/audit.js";
+import { createBilledSubscription, memberTypeForPlan } from "../../services/membershipBilling.js";
+import { dateInTimeZone } from "../../services/rules.js";
+import { env } from "../../config/env.js";
 
 export const membersRouter = Router();
 const input = z.object({ fullName: z.string().trim().min(2).max(120), mobile: z.string().regex(/^[0-9+ -]{8,16}$/), email: z.string().email().optional().or(z.literal("")), dateOfBirth: z.string().date().optional().nullable(), gender: z.string().max(30).optional().nullable(), address: z.string().max(500).optional().nullable(), emergencyContact: z.string().max(50).optional().nullable(), type: z.nativeEnum(MemberType), status: z.nativeEnum(RecordStatus).default(RecordStatus.ACTIVE), notes: z.string().max(2000).optional().nullable() });
@@ -31,20 +34,33 @@ membersRouter.post("/", asyncHandler(async (req, res) => {
   await audit(req, "MEMBER_CREATED", "Member", member.id, { publicId: member.publicId, fullName: member.fullName }); ok(res.status(201), member);
 }));
 membersRouter.get("/:id", asyncHandler(async (req, res) => {
-  const member = await prisma.member.findUnique({ where: { id: String(req.params.id) }, include: { subscriptions: { include: { plan: true }, orderBy: { createdAt: "desc" } }, allocations: { include: { seat: { include: { room: true } }, shift: true }, orderBy: { createdAt: "desc" } }, attendances: { orderBy: { checkInAt: "desc" }, take: 50 }, loans: { include: { copy: { include: { book: true } } }, orderBy: { createdAt: "desc" } }, payments: { include: { refunds: true }, orderBy: { paidAt: "desc" } }, invoices: { where: { status: { in: ["ISSUED", "PARTIAL"] } }, orderBy: { createdAt: "desc" } }, fines: { orderBy: { createdAt: "desc" } } } });
+  const member = await prisma.member.findUnique({ where: { id: String(req.params.id) }, include: { subscriptions: { include: { plan: true, invoice: true }, orderBy: { createdAt: "desc" } }, allocations: { include: { seat: { include: { room: true } }, shift: true }, orderBy: { createdAt: "desc" } }, attendances: { orderBy: { checkInAt: "desc" }, take: 50 }, loans: { include: { copy: { include: { book: true } } }, orderBy: { createdAt: "desc" } }, payments: { include: { refunds: true }, orderBy: { paidAt: "desc" } }, invoices: { where: { status: { in: ["ISSUED", "PARTIAL"] } }, orderBy: { createdAt: "desc" } }, fines: { orderBy: { createdAt: "desc" } } } });
   if (!member) throw new AppError(404, "Member not found."); ok(res, { ...member, financialSummary: financialSummary({ payments: member.payments, invoices: member.invoices, fines: member.fines.filter(fine => ["UNPAID", "PARTIAL"].includes(fine.status)) }) });
 }));
 membersRouter.patch("/:id", asyncHandler(async (req, res) => {
-  const body = input.partial().parse(req.body);
-  const member = await prisma.member.update({
-    where: { id: String(req.params.id) },
-    data: {
-      ...body,
-      email: body.email === "" ? null : body.email,
-      dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : body.dateOfBirth,
-    },
+  const parsed = input.partial().extend({ membershipPlanId: z.string().uuid().optional(), membershipStartDate: z.string().date().optional(), membershipDiscount: z.coerce.number().nonnegative().optional() }).parse(req.body);
+  const { membershipPlanId, membershipStartDate, membershipDiscount, ...body } = parsed, id = String(req.params.id), today = dateInTimeZone(new Date(), env.LIBRARY_TIMEZONE);
+  const existing = await prisma.member.findUnique({ where: { id }, include: { subscriptions: { where: { status: "ACTIVE", startDate: { lte: today }, endDate: { gte: today } }, include: { invoice: true }, orderBy: { startDate: "desc" } }, loans: { where: { status: { in: ["ACTIVE", "OVERDUE"] } } }, reservations: { where: { status: { in: ["WAITING", "READY"] } } }, allocations: { where: { status: { in: ["ACTIVE", "UPCOMING"] }, endDate: { gte: today } } } } });
+  if (!existing) throw new AppError(404, "Member not found.");
+  const current = existing.subscriptions[0], replacingPlan = Boolean(membershipPlanId && membershipPlanId !== current?.planId);
+  if (body.type && body.type !== existing.type && !membershipPlanId) throw new AppError(422, "Select the membership plan that should provide the new member type.", "PLAN_REQUIRED_FOR_TYPE_CHANGE");
+  let plan = membershipPlanId ? await prisma.membershipPlan.findUnique({ where: { id: membershipPlanId }, include: { allowedShifts: true } }) : null;
+  if (membershipPlanId && (!plan || !plan.active)) throw new AppError(400, "The selected active membership plan was not found.");
+  if (plan && body.type && memberTypeForPlan(plan) !== body.type) throw new AppError(422, "The selected plan does not match the requested member type.", "PLAN_TYPE_MISMATCH");
+  if (replacingPlan && plan) {
+    if (!plan.studyAccess && existing.allocations.length) throw new AppError(409, "Release current and upcoming study seats before changing to a plan without study access.", "ACTIVE_SEAT_ACCESS");
+    if (!plan.bookAccess && (existing.loans.length || existing.reservations.length)) throw new AppError(409, "Return active loans and cancel reservations before changing to a plan without book access.", "ACTIVE_BOOK_ACCESS");
+    if (existing.subscriptions.some(subscription => subscription.invoice && Number(subscription.invoice.paid) > 0)) throw new AppError(409, "Refund or adjust the paid membership before replacing its plan.", "PAID_MEMBERSHIP_REPLACEMENT");
+  }
+  const member = await prisma.$transaction(async tx => {
+    if (replacingPlan && plan) {
+      for (const subscription of existing.subscriptions) { if (subscription.invoice) await tx.invoice.update({ where: { id: subscription.invoice.id }, data: { status: "VOID" } }); await tx.subscription.update({ where: { id: subscription.id }, data: { status: "CANCELLED" } }); }
+      await createBilledSubscription(tx, { memberId: id, plan, startDate: membershipStartDate ? new Date(membershipStartDate) : today, discount: membershipDiscount ?? 0 });
+    }
+    const { type: _requestedType, ...editable } = body;
+    return tx.member.update({ where: { id }, data: { ...editable, ...(plan ? { type: memberTypeForPlan(plan) } : {}), email: body.email === "" ? null : body.email, dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : body.dateOfBirth } });
   });
-  await audit(req, "MEMBER_UPDATED", "Member", member.id, { fields: Object.keys(body) });
+  await audit(req, "MEMBER_UPDATED", "Member", member.id, { fields: Object.keys(body), membershipPlanId, replacedPlan: replacingPlan });
   ok(res, member);
 }));
 membersRouter.post("/:id/archive", asyncHandler(async (req, res) => { const member = await prisma.member.update({ where: { id: String(req.params.id) }, data: { status: RecordStatus.ARCHIVED } }); await audit(req, "MEMBER_ARCHIVED", "Member", member.id); ok(res, member); }));
