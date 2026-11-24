@@ -1,6 +1,8 @@
 import { MemberType, Prisma } from "@prisma/client";
 import { dateInTimeZone, subscriptionEndDate } from "./rules.js";
 import { env } from "../config/env.js";
+import { differenceInCalendarDays } from "date-fns";
+import { AppError } from "../utils/http.js";
 
 export type PlanWithShifts = Prisma.MembershipPlanGetPayload<{ include: { allowedShifts: true } }>;
 
@@ -9,20 +11,33 @@ export function memberTypeForPlan(plan: Pick<PlanWithShifts, "studyAccess" | "bo
   return plan.studyAccess ? MemberType.STUDY : MemberType.BOOK;
 }
 
-export async function createBilledSubscription(tx: Prisma.TransactionClient, input: { memberId: string; plan: PlanWithShifts; startDate: Date; discount: number; renewalReference?: string }) {
-  const finalFee = Math.max(0, Number(input.plan.price) - input.discount);
+export function membershipQuote(plan: Pick<PlanWithShifts, "price" | "duration" | "durationUnit">, startDate: Date, requestedEndDate?: Date, discount = 0) {
+  const defaultEndDate = subscriptionEndDate(startDate, plan.duration, plan.durationUnit);
+  const endDate = requestedEndDate ?? defaultEndDate;
+  if (endDate < defaultEndDate) throw new AppError(422, "Membership end date cannot be earlier than the plan's default end date.", "MEMBERSHIP_END_TOO_EARLY");
+  const standardDays = differenceInCalendarDays(defaultEndDate, startDate) + 1;
+  const assignedDays = differenceInCalendarDays(endDate, startDate) + 1;
+  const originalFee = new Prisma.Decimal(plan.price).mul(assignedDays).div(standardDays).toDecimalPlaces(2);
+  const discountAmount = new Prisma.Decimal(discount).toDecimalPlaces(2);
+  if (discountAmount.greaterThan(originalFee)) throw new AppError(422, "Discount cannot exceed the calculated membership fee.", "INVALID_DISCOUNT");
+  const finalFee = originalFee.sub(discountAmount).toDecimalPlaces(2);
+  return { startDate, defaultEndDate, endDate, standardDays, assignedDays, originalFee, discount: discountAmount, finalFee };
+}
+
+export async function createBilledSubscription(tx: Prisma.TransactionClient, input: { memberId: string; plan: PlanWithShifts; startDate: Date; endDate?: Date; discount: number; renewalReference?: string }) {
+  const quote = membershipQuote(input.plan, input.startDate, input.endDate, input.discount);
   const subscription = await tx.subscription.create({
     data: {
       memberId: input.memberId,
       planId: input.plan.id,
       startDate: input.startDate,
-      endDate: subscriptionEndDate(input.startDate, input.plan.duration, input.plan.durationUnit),
-      originalFee: input.plan.price,
-      discount: input.discount.toFixed(2),
-      finalFee: finalFee.toFixed(2),
+      endDate: quote.endDate,
+      originalFee: quote.originalFee,
+      discount: quote.discount,
+      finalFee: quote.finalFee,
       renewalReference: input.renewalReference,
-      paymentStatus: finalFee === 0 ? "PAID" : "UNPAID",
-      planSnapshot: { name: input.plan.name, type: input.plan.type, price: input.plan.price.toString(), duration: input.plan.duration, durationUnit: input.plan.durationUnit, studyAccess: input.plan.studyAccess, bookAccess: input.plan.bookAccess, maxBooks: input.plan.maxBooks, loanDays: input.plan.loanDays, renewalLimit: input.plan.renewalLimit, shiftIds: input.plan.allowedShifts.map(item => item.shiftId) },
+      paymentStatus: quote.finalFee.isZero() ? "PAID" : "UNPAID",
+      planSnapshot: { name: input.plan.name, type: input.plan.type, price: input.plan.price.toString(), duration: input.plan.duration, durationUnit: input.plan.durationUnit, studyAccess: input.plan.studyAccess, bookAccess: input.plan.bookAccess, maxBooks: input.plan.maxBooks, loanDays: input.plan.loanDays, renewalLimit: input.plan.renewalLimit, shiftIds: input.plan.allowedShifts.map(item => item.shiftId), defaultEndDate: quote.defaultEndDate.toISOString().slice(0, 10), assignedEndDate: quote.endDate.toISOString().slice(0, 10), standardDays: quote.standardDays, assignedDays: quote.assignedDays, pricing: "DAILY_PRORATED" },
     },
   });
   const rows = await tx.$queryRaw<Array<{ value: bigint }>>`SELECT nextval('invoice_number_seq') AS value`;
@@ -31,11 +46,11 @@ export async function createBilledSubscription(tx: Prisma.TransactionClient, inp
       invoiceNo: `SWP-INV-${String(rows[0]!.value).padStart(6, "0")}`,
       memberId: input.memberId,
       subscriptionId: subscription.id,
-      total: finalFee.toFixed(2),
+      total: quote.finalFee,
       paid: "0.00",
-      status: finalFee === 0 ? "PAID" : "ISSUED",
+      status: quote.finalFee.isZero() ? "PAID" : "ISSUED",
       dueDate: input.startDate,
-      items: { create: { type: "SUBSCRIPTION", description: `Membership fee — ${input.plan.name}`, quantity: 1, unitAmount: finalFee.toFixed(2), total: finalFee.toFixed(2) } },
+      items: { create: { type: "SUBSCRIPTION", description: `Membership fee — ${input.plan.name} · ${quote.assignedDays} days`, quantity: 1, unitAmount: quote.finalFee, total: quote.finalFee } },
     },
     include: { items: true },
   });

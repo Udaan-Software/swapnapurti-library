@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Armchair,
@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, json } from "../lib/api";
-import { Button, Card, Modal } from "../components/ui";
+import { Button, Card, Modal, PageHeading } from "../components/ui";
 import { ResourcePage, badge, money } from "./ResourcePage";
 
 type Item = { id: string; [key: string]: any };
@@ -120,18 +120,15 @@ const planPayload = (form: FormData) => ({
   duration: form.get("duration"),
   durationUnit: form.get("durationUnit"),
   studyAccess: form.get("studyAccess") === "on",
-  bookAccess: form.get("bookAccess") === "on",
-  maxBooks: form.get("maxBooks"),
-  loanDays: form.get("loanDays"),
-  renewalLimit: form.get("renewalLimit"),
+  bookAccess: form.get("classAccess") === "on",
+  maxBooks: 0,
+  loanDays: 0,
+  renewalLimit: 0,
   description: form.get("description") || null,
   active: form.get("active") === "on",
-  allowedShiftIds: form.getAll("allowedShiftIds"),
+  allowedShiftIds: [],
 });
-function PlanFields({ plan, shifts }: { plan?: Item; shifts: Item[] }) {
-  const selected = new Set(
-    (plan?.allowedShifts ?? []).map((item: Item) => item.shiftId),
-  );
+function PlanFields({ plan }: { plan?: Item }) {
   return (
     <>
       <label className={`${labelClass} ${full}`}>
@@ -154,8 +151,8 @@ function PlanFields({ plan, shifts }: { plan?: Item; shifts: Item[] }) {
           <option value="STUDY_QUARTERLY">Study quarterly</option>
           <option value="STUDY_HALF_YEARLY">Study half-yearly</option>
           <option value="STUDY_YEARLY">Study yearly</option>
-          <option value="BOOK">Book</option>
-          <option value="COMBINED">Combined</option>
+          <option value="BOOK">Class</option>
+          <option value="COMBINED">Study + Class</option>
           <option value="CUSTOM">Custom</option>
         </select>
       </label>
@@ -194,36 +191,6 @@ function PlanFields({ plan, shifts }: { plan?: Item; shifts: Item[] }) {
           <option value="YEAR">Years</option>
         </select>
       </label>
-      <label className={labelClass}>
-        Maximum books
-        <input
-          className="input mt-2"
-          name="maxBooks"
-          type="number"
-          min="0"
-          defaultValue={plan?.maxBooks ?? 0}
-        />
-      </label>
-      <label className={labelClass}>
-        Loan days
-        <input
-          className="input mt-2"
-          name="loanDays"
-          type="number"
-          min="0"
-          defaultValue={plan?.loanDays ?? 0}
-        />
-      </label>
-      <label className={labelClass}>
-        Renewal limit
-        <input
-          className="input mt-2"
-          name="renewalLimit"
-          type="number"
-          min="0"
-          defaultValue={plan?.renewalLimit ?? 0}
-        />
-      </label>
       <label className={`${labelClass} ${full}`}>
         Description
         <textarea
@@ -233,31 +200,6 @@ function PlanFields({ plan, shifts }: { plan?: Item; shifts: Item[] }) {
           defaultValue={plan?.description ?? ""}
         />
       </label>
-      <fieldset
-        className={`${full} rounded-xl border border-[var(--border)] p-3`}
-      >
-        <legend className="px-1 text-sm font-semibold">
-          Allowed study shifts
-        </legend>
-        <p className="mb-2 text-xs text-[var(--muted)]">
-          Leave every shift unchecked to allow all shifts.
-        </p>
-        <div className="flex flex-wrap gap-4">
-          {shifts
-            .filter((shift) => shift.active)
-            .map((shift) => (
-              <label key={shift.id}>
-                <input
-                  type="checkbox"
-                  name="allowedShiftIds"
-                  value={shift.id}
-                  defaultChecked={selected.has(shift.id)}
-                />{" "}
-                {shift.name}
-              </label>
-            ))}
-        </div>
-      </fieldset>
       <div className={`${full} flex flex-wrap items-center gap-5`}>
         <label>
           <input
@@ -270,10 +212,10 @@ function PlanFields({ plan, shifts }: { plan?: Item; shifts: Item[] }) {
         <label>
           <input
             type="checkbox"
-            name="bookAccess"
+            name="classAccess"
             defaultChecked={plan?.bookAccess ?? false}
           />{" "}
-          Book access
+          Class access
         </label>
         <label>
           <input
@@ -290,12 +232,11 @@ function PlanFields({ plan, shifts }: { plan?: Item; shifts: Item[] }) {
 export function PlansPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Item | null>(null);
-  const shifts = useItems("/shifts");
   return (
     <>
       <ResourcePage
         title="Membership Plans"
-        description="Configurable study, book and combined access plans."
+        description="Configurable study, class and combined access plans."
         endpoint="/membership-plans"
         action={
           <Button onClick={() => setOpen(true)}>
@@ -311,7 +252,7 @@ export function PlansPage() {
         )}
         columns={[
           { label: "Plan", value: (r) => <b>{r.name}</b> },
-          { label: "Type", value: (r) => badge(r.type) },
+          { label: "Type", value: (r) => badge(r.type === "BOOK" ? "CLASS" : r.type === "COMBINED" ? "STUDY + CLASS" : r.type) },
           { label: "Price", value: (r) => money(r.price) },
           {
             label: "Validity",
@@ -320,18 +261,9 @@ export function PlansPage() {
           {
             label: "Access",
             value: (r) =>
-              [r.studyAccess && "Study", r.bookAccess && "Books"]
+              [r.studyAccess && "Study", r.bookAccess && "Class"]
                 .filter(Boolean)
                 .join(" + ") || "None",
-          },
-          {
-            label: "Study shifts",
-            value: (r) =>
-              r.allowedShifts?.length
-                ? r.allowedShifts
-                    .map((item: Item) => item.shift.name)
-                    .join(", ")
-                : "All shifts",
           },
           {
             label: "Status",
@@ -347,7 +279,7 @@ export function PlansPage() {
         invalidate={["/membership-plans"]}
         transform={planPayload}
       >
-        <PlanFields shifts={shifts} />
+        <PlanFields />
       </ActionForm>
       {editing && (
         <ActionForm
@@ -359,7 +291,7 @@ export function PlansPage() {
           invalidate={["/membership-plans", "/subscriptions"]}
           transform={planPayload}
         >
-          <PlanFields plan={editing} shifts={shifts} />
+          <PlanFields plan={editing} />
         </ActionForm>
       )}
     </>
@@ -507,7 +439,7 @@ function SeatAllocationForm({
   onClose: () => void;
 }) {
   const [memberId, setMemberId] = useState("");
-  const [shiftId, setShiftId] = useState("");
+  const shiftId = shifts.find((shift) => shift.active)?.id ?? "";
   const [startDate, setStartDate] = useState(today());
   const [endDate, setEndDate] = useState(today());
   const ready = Boolean(
@@ -557,26 +489,7 @@ function SeatAllocationForm({
           />
         </select>
       </label>
-      <label className={labelClass}>
-        Shift / slot
-        <select
-          name="shiftId"
-          className="input mt-2"
-          value={shiftId}
-          onChange={(event) => setShiftId(event.target.value)}
-          required
-        >
-          <option value="" disabled>
-            Select a slot
-          </option>
-          <Options
-            items={shifts.filter((x) => x.active)}
-            label={(x) =>
-              `${x.name} · ${minutes(x.startMinutes)}–${minutes(x.endMinutes)}`
-            }
-          />
-        </select>
-      </label>
+      <input type="hidden" name="shiftId" value={shiftId} />
       <label className={labelClass}>
         From
         <input
@@ -615,18 +528,18 @@ function SeatAllocationForm({
         >
           <option value="" disabled>
             {!ready
-              ? "Select member, slot and dates first"
+              ? "Select a member and dates first"
               : isFetching
                 ? "Checking availability…"
                 : error
                   ? "Availability could not be checked"
                   : seats.length
                     ? `Select from ${seats.length} available seat${seats.length === 1 ? "" : "s"}`
-                    : "No seats available for this period and slot"}
+                    : "No seats available for this period"}
           </option>
           <Options
             items={seats}
-            label={(x) => `${x.room.name} · Seat ${x.number}`}
+            label={(x) => `Seat ${x.number}`}
           />
         </select>
         {error && (
@@ -636,8 +549,7 @@ function SeatAllocationForm({
         )}
         {ready && !isFetching && !error && (
           <p className="mt-2 text-xs text-[var(--muted)]">
-            Only seats free for the complete date range and selected slot are
-            shown.
+            Only seats free for the complete date range are shown.
           </p>
         )}
       </label>
@@ -660,12 +572,9 @@ function SeatMap({
   onEditSeat: (seat: Item) => void;
 }) {
   const activeShifts = shifts.filter((shift) => shift.active),
-    [shiftId, setShiftId] = useState(""),
+    shiftId = activeShifts[0]?.id ?? "",
     [date, setDate] = useState(today()),
     [selected, setSelected] = useState("");
-  useEffect(() => {
-    if (!shiftId && activeShifts[0]) setShiftId(activeShifts[0].id);
-  }, [shiftId, activeShifts]);
   const endpoint = `/seat-allocations/seat-map?shiftId=${encodeURIComponent(shiftId)}&date=${date}`;
   const {
     data: rooms = [],
@@ -685,10 +594,10 @@ function SeatMap({
         <div>
           <h2 className="text-lg font-extrabold">Live seat layout</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            Choose a date and shift, then click a seat to see its allocation.
+            Choose a date, then click a seat to see its allocation.
           </p>
         </div>
-        <div className="grid w-full gap-3 sm:w-auto sm:grid-cols-2">
+        <div className="grid w-full gap-3 sm:w-auto">
           <label className={labelClass}>
             Date
             <input
@@ -702,41 +611,14 @@ function SeatMap({
               }}
             />
           </label>
-          <label className={labelClass}>
-            Shift
-            <select
-              className="input mt-2"
-              value={shiftId}
-              onChange={(event) => {
-                setShiftId(event.target.value);
-                setSelected("");
-              }}
-            >
-              <Options
-                items={activeShifts}
-                label={(shift) =>
-                  `${shift.name} · ${minutes(shift.startMinutes)}–${minutes(shift.endMinutes)}`
-                }
-              />
-            </select>
-          </label>
         </div>
       </div>
       <div className="mt-5 flex flex-wrap gap-3 text-xs font-bold">
         <span className="seat-legend seat-available">
           Available {count("AVAILABLE")}
         </span>
-        <span className="seat-legend seat-occupied">
-          Occupied {count("OCCUPIED")}
-        </span>
         <span className="seat-legend seat-reserved">
           Reserved {count("RESERVED")}
-        </span>
-        <span className="seat-legend seat-maintenance">
-          Maintenance {count("MAINTENANCE")}
-        </span>
-        <span className="seat-legend seat-disabled">
-          Disabled {count("DISABLED")}
         </span>
       </div>
       {isLoading && (
@@ -751,7 +633,7 @@ function SeatMap({
       )}
       {!activeShifts.length && (
         <div className="py-12 text-center text-sm text-[var(--muted)]">
-          Create an active study shift to view the seat layout.
+          The permanent study schedule is not configured.
         </div>
       )}
       <div className="mt-6 space-y-6">
@@ -760,13 +642,7 @@ function SeatMap({
             key={room.id}
             className="rounded-2xl border border-[var(--border)] bg-[var(--bg)] p-4"
           >
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h3 className="font-extrabold">{room.name}</h3>
-                <p className="text-xs text-[var(--muted)]">
-                  {room.floor || "Floor not specified"}
-                </p>
-              </div>
+            <div className="mb-4 flex items-center justify-end">
               <span className="text-xs font-bold text-[var(--muted)]">
                 {room.seats.length} seats
               </span>
@@ -799,7 +675,6 @@ function SeatMap({
                             {seat.allocation.member.fullName}
                           </span>
                           <span>{seat.allocation.member.publicId}</span>
-                          <span>{seat.allocation.shift.name}</span>
                           <span>
                             {new Date(
                               seat.allocation.startDate,
@@ -851,138 +726,61 @@ function SeatMap({
   );
 }
 export function RoomsSeatsPage() {
-  const [roomOpen, setRoomOpen] = useState(false);
+  const [seatOpen, setSeatOpen] = useState(false);
   const [allocationOpen, setAllocationOpen] = useState(false);
-  const [editingRoom, setEditingRoom] = useState<Item | null>(null);
   const [editingSeat, setEditingSeat] = useState<Item | null>(null);
   const shifts = useItems("/shifts");
   const members = useItems("/members?pageSize=100");
-  const roomFields = (room?: Item) => (
-    <>
-      <label className={`${labelClass} ${full}`}>
-        Room name
-        <input
-          name="name"
-          className="input mt-2"
-          defaultValue={room?.name ?? ""}
-          required
-        />
-      </label>
-      <label className={labelClass}>
-        Floor
-        <input
-          name="floor"
-          className="input mt-2"
-          defaultValue={room?.floor ?? ""}
-        />
-      </label>
-      {!room && (
-        <>
-          <label className={labelClass}>
-            Number of seats
-            <input
-              name="seatCount"
-              className="input mt-2"
-              type="number"
-              min="0"
-              max="500"
-              defaultValue="0"
-            />
-          </label>
-          <label className={labelClass}>
-            Seat prefix
-            <input name="seatPrefix" className="input mt-2" defaultValue="S" />
-          </label>
-        </>
-      )}
-      <label className={`${labelClass} ${full}`}>
-        Description
-        <textarea
-          name="description"
-          className="input mt-2"
-          rows={2}
-          defaultValue={room?.description ?? ""}
-        />
-      </label>
-      {room && (
-        <label className={full}>
-          <input type="checkbox" name="active" defaultChecked={room.active} />{" "}
-          Active room
-        </label>
-      )}
-    </>
-  );
+  const rooms = useItems("/study-rooms");
+  const primaryRoom = rooms.find((room) => room.active) ?? rooms[0];
   return (
     <>
-      <ResourcePage
-        title="Study Rooms & Seats"
-        description="Room inventory, visual availability and conflict-safe allocation controls."
-        endpoint="/study-rooms"
+      <PageHeading
+        title="Seats"
+        description="Visual availability and conflict-safe seat allocation."
         action={
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => setRoomOpen(true)}>
+            <Button
+              variant="ghost"
+              disabled={!primaryRoom}
+              onClick={() => setSeatOpen(true)}
+            >
               <Plus size={17} />
-              Room
+              Add seat
             </Button>
             <Button onClick={() => setAllocationOpen(true)}>Assign seat</Button>
           </div>
         }
-        rowAction={(room) => (
-          <Button variant="ghost" onClick={() => setEditingRoom(room)}>
-            <Pencil size={15} />
-            Edit
-          </Button>
-        )}
-        columns={[
-          { label: "Room", value: (r) => <b>{r.name}</b> },
-          { label: "Floor", value: (r) => r.floor || "—" },
-          { label: "Seats", value: (r) => r.seats.length },
-          {
-            label: "Operational seats",
-            value: (r) =>
-              r.seats.filter(
-                (s: Item) =>
-                  s.active && !["MAINTENANCE", "DISABLED"].includes(s.status),
-              ).length,
-          },
-          {
-            label: "Status",
-            value: (r) => badge(r.active ? "ACTIVE" : "INACTIVE"),
-          },
-        ]}
       />
       <SeatMap shifts={shifts} onEditSeat={setEditingSeat} />
       <ActionForm
-        open={roomOpen}
-        onClose={() => setRoomOpen(false)}
-        title="Create study room"
-        endpoint="/study-rooms"
+        open={seatOpen}
+        onClose={() => setSeatOpen(false)}
+        title="Add seat"
+        endpoint={`/study-rooms/${primaryRoom?.id ?? "unavailable"}/seats`}
         invalidate={[
           "/study-rooms",
           "/seat-allocations/seat-map",
           "/dashboard",
         ]}
+        transform={(form) => ({
+          number: form.get("number"),
+          type: form.get("type"),
+        })}
       >
-        {roomFields()}
+        <label className={`${labelClass} ${full}`}>
+          Seat number
+          <input name="number" className="input mt-2" required />
+        </label>
+        <label className={`${labelClass} ${full}`}>
+          Seat type
+          <select name="type" className="input mt-2" defaultValue="STANDARD">
+            <option value="STANDARD">Standard</option>
+            <option value="PREMIUM">Premium</option>
+            <option value="ACCESSIBLE">Accessible</option>
+          </select>
+        </label>
       </ActionForm>
-      {editingRoom && (
-        <ActionForm
-          open
-          onClose={() => setEditingRoom(null)}
-          title="Edit study room"
-          endpoint={`/study-rooms/${editingRoom.id}`}
-          method="PATCH"
-          invalidate={["/study-rooms", "/seat-allocations/seat-map"]}
-          transform={(form) => ({
-            name: form.get("name"),
-            floor: form.get("floor") || null,
-            description: form.get("description") || null,
-            active: form.get("active") === "on",
-          })}
-        >
-          {roomFields(editingRoom)}
-        </ActionForm>
-      )}
       {editingSeat && (
         <ActionForm
           open
@@ -1039,7 +837,6 @@ export function RoomsSeatsPage() {
     </>
   );
 }
-
 const shiftPayload = (form: FormData) => ({
   name: form.get("name"),
   startMinutes: toMinutes(String(form.get("start"))),
@@ -1192,7 +989,6 @@ export function AttendancePage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Item | null>(null);
   const members = useItems("/members?pageSize=100");
-  const shifts = useItems("/shifts");
   const qc = useQueryClient();
   const checkout = useMutation({
     mutationFn: (id: string) =>
@@ -1247,7 +1043,6 @@ export function AttendancePage() {
                 ? new Date(r.checkOutAt).toLocaleString("en-IN")
                 : "Currently inside",
           },
-          { label: "Shift", value: (r) => r.shift?.name || "—" },
           { label: "Status", value: (r) => badge(r.status) },
         ]}
       />
@@ -1259,7 +1054,6 @@ export function AttendancePage() {
         invalidate={["/attendance", "/dashboard"]}
         transform={(f) => ({
           memberId: f.get("memberId"),
-          ...(f.get("shiftId") ? { shiftId: f.get("shiftId") } : {}),
         })}
       >
         <label className={`${labelClass} ${full}`}>
@@ -1268,16 +1062,6 @@ export function AttendancePage() {
             <Options
               items={members}
               label={(x) => `${x.publicId} · ${x.fullName}`}
-            />
-          </select>
-        </label>
-        <label className={`${labelClass} ${full}`}>
-          Shift
-          <select name="shiftId" className="input mt-2">
-            <option value="">No specific shift</option>
-            <Options
-              items={shifts.filter((x) => x.active)}
-              label={(x) => x.name}
             />
           </select>
         </label>
@@ -1299,7 +1083,6 @@ export function AttendancePage() {
             checkOutAt: f.get("checkOutAt")
               ? new Date(String(f.get("checkOutAt"))).toISOString()
               : null,
-            shiftId: f.get("shiftId") || null,
             reason: f.get("reason"),
           })}
         >
@@ -1323,17 +1106,6 @@ export function AttendancePage() {
                 editing.checkOutAt ? dateTimeLocal(editing.checkOutAt) : ""
               }
             />
-          </label>
-          <label className={`${labelClass} ${full}`}>
-            Shift
-            <select
-              name="shiftId"
-              className="input mt-2"
-              defaultValue={editing.shiftId ?? ""}
-            >
-              <option value="">No specific shift</option>
-              <Options items={shifts} label={(x) => x.name} />
-            </select>
           </label>
           <label className={`${labelClass} ${full}`}>
             Correction reason

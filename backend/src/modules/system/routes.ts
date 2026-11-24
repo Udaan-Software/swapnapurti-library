@@ -5,6 +5,8 @@ import { prisma } from "../../config/prisma.js";
 import { asyncHandler, ok, pageParams } from "../../utils/http.js";
 import { audit } from "../../services/audit.js";
 import { syncSeatAllocationNotifications } from "../../services/reminders.js";
+import { env } from "../../config/env.js";
+import { dateKeyInTimeZone, shiftsOverlap, timeZoneBoundaries } from "../../services/rules.js";
 
 export const dashboardRouter = Router();
 export const settingsRouter = Router();
@@ -13,137 +15,86 @@ export const auditRouter = Router();
 dashboardRouter.get(
   "/",
   asyncHandler(async (_req, res) => {
-    const now = new Date(),
-      monthStart = new Date(now.getFullYear(), now.getMonth(), 1),
-      dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()),
-      soon = new Date(now.getTime() + 7 * 86400000);
-    const [
-      members,
-      activeMembers,
-      expired,
-      newMembers,
-      seats,
-      availableSeats,
-      inside,
-      titles,
-      copies,
-      issued,
-      overdue,
-      todayPayments,
-      monthPayments,
-      todayRefunds,
-      monthRefunds,
-      unpaidFines,
-      expiring,
-      overdueItems,
-      recentPayments,
-      recentRefunds,
-    ] = await prisma.$transaction([
-      prisma.member.count(),
-      prisma.member.count({ where: { status: "ACTIVE" } }),
-      prisma.subscription.count({
-        where: {
-          OR: [
-            { status: "EXPIRED" },
-            { endDate: { lt: now }, status: "ACTIVE" },
-          ],
-        },
-      }),
-      prisma.member.count({ where: { createdAt: { gte: monthStart } } }),
-      prisma.seat.count({ where: { active: true } }),
-      prisma.seat.count({ where: { active: true, status: "AVAILABLE" } }),
-      prisma.attendance.count({ where: { status: "OPEN" } }),
-      prisma.book.count({ where: { archived: false } }),
-      prisma.bookCopy.count({ where: { status: { not: "ARCHIVED" } } }),
-      prisma.bookLoan.count({ where: { status: "ACTIVE" } }),
-      prisma.bookLoan.count({
-        where: { status: { in: ["ACTIVE", "OVERDUE"] }, dueDate: { lt: now } },
-      }),
-      prisma.payment.aggregate({
-        where: { paidAt: { gte: dayStart } },
-        _sum: { amount: true },
-      }),
-      prisma.payment.aggregate({
-        where: { paidAt: { gte: monthStart } },
-        _sum: { amount: true },
-      }),
-      prisma.refund.aggregate({
-        where: { refundedAt: { gte: dayStart } },
-        _sum: { amount: true },
-      }),
-      prisma.refund.aggregate({
-        where: { refundedAt: { gte: monthStart } },
-        _sum: { amount: true },
-      }),
-      prisma.fine.aggregate({
-        where: { status: { in: ["UNPAID", "PARTIAL"] } },
-        _sum: { amount: true, paidAmount: true },
-      }),
-      prisma.subscription.findMany({
-        where: { endDate: { gte: now, lte: soon }, status: "ACTIVE" },
-        include: { member: true, plan: true },
-        orderBy: { endDate: "asc" },
-        take: 8,
-      }),
-      prisma.bookLoan.findMany({
-        where: { dueDate: { lt: now }, status: { in: ["ACTIVE", "OVERDUE"] } },
-        include: { member: true, copy: { include: { book: true } } },
-        orderBy: { dueDate: "asc" },
-        take: 8,
-      }),
-      prisma.payment.findMany({
-        where: {
-          paidAt: { gte: new Date(now.getFullYear(), now.getMonth() - 5, 1) },
-        },
-        select: { amount: true, paidAt: true },
-      }),
-      prisma.refund.findMany({
-        where: {
-          refundedAt: {
-            gte: new Date(now.getFullYear(), now.getMonth() - 5, 1),
-          },
-        },
-        select: { amount: true, refundedAt: true },
-      }),
-    ]);
-    const revenue = new Map<string, number>();
-    for (const p of recentPayments) {
-      const key = p.paidAt.toISOString().slice(0, 7);
-      revenue.set(key, (revenue.get(key) ?? 0) + Number(p.amount));
+    const now = new Date();
+    const { dayStart, nextDayStart, monthStart, nextMonthStart, sixMonthStart, localDate: today } = timeZoneBoundaries(now, env.LIBRARY_TIMEZONE);
+    const soon = new Date(today.getTime() + 7 * 86400000);
+    const seatSoon = new Date(today.getTime() + 3 * 86400000);
+    const result = await prisma.$transaction(async tx => {
+      const [room, permanent] = await Promise.all([
+        tx.studyRoom.findFirst({ where: { active: true }, orderBy: { createdAt: "asc" } }),
+        tx.shift.findFirst({ where: { active: true }, orderBy: [{ fullDay: "desc" }, { createdAt: "asc" }] }),
+      ]);
+      const operationalSeats = room ? await tx.seat.findMany({
+        where: { roomId: room.id, active: true, status: { notIn: ["MAINTENANCE", "DISABLED"] } },
+        include: { allocations: { where: { status: { in: ["ACTIVE", "UPCOMING"] }, startDate: { lte: today }, endDate: { gte: today } }, include: { shift: true } } },
+      }) : [];
+      const [
+        members,
+        activeMembers,
+        expiredMemberships,
+        newMembers,
+        inside,
+        todayPayments,
+        monthPayments,
+        todayRefunds,
+        monthRefunds,
+        pendingInvoices,
+        expiring,
+        seatExpiring,
+        recentPayments,
+        recentRefunds,
+      ] = await Promise.all([
+        tx.member.count(),
+        tx.member.count({ where: { status: "ACTIVE" } }),
+        tx.member.count({ where: { status: "ACTIVE", subscriptions: { some: { status: { in: ["ACTIVE", "EXPIRED"] }, endDate: { lt: today } }, none: { status: "ACTIVE", endDate: { gte: today } } } } }),
+        tx.member.count({ where: { registrationDate: { gte: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)), lte: today } } }),
+        tx.attendance.count({ where: { status: "OPEN" } }),
+        tx.payment.aggregate({ where: { paidAt: { gte: dayStart, lt: nextDayStart } }, _sum: { amount: true } }),
+        tx.payment.aggregate({ where: { paidAt: { gte: monthStart, lt: nextMonthStart } }, _sum: { amount: true } }),
+        tx.refund.aggregate({ where: { refundedAt: { gte: dayStart, lt: nextDayStart } }, _sum: { amount: true } }),
+        tx.refund.aggregate({ where: { refundedAt: { gte: monthStart, lt: nextMonthStart } }, _sum: { amount: true } }),
+        tx.invoice.aggregate({ where: { status: { in: ["ISSUED", "PARTIAL"] } }, _sum: { total: true, paid: true } }),
+        tx.subscription.findMany({ where: { endDate: { gte: today, lte: soon }, status: "ACTIVE" }, include: { member: true, plan: true }, orderBy: { endDate: "asc" }, take: 8 }),
+        room ? tx.seatAllocation.findMany({ where: { seat: { roomId: room.id }, status: { in: ["ACTIVE", "UPCOMING"] }, endDate: { gte: today, lte: seatSoon } }, include: { member: true, seat: true }, orderBy: { endDate: "asc" }, take: 8 }) : Promise.resolve([]),
+        tx.payment.findMany({ where: { paidAt: { gte: sixMonthStart, lt: nextMonthStart } }, select: { amount: true, paidAt: true } }),
+        tx.refund.findMany({ where: { refundedAt: { gte: sixMonthStart, lt: nextMonthStart } }, select: { amount: true, refundedAt: true } }),
+      ]);
+      const availableSeats = permanent ? operationalSeats.filter(seat => !seat.allocations.some(allocation => shiftsOverlap(permanent, allocation.shift))).length : 0;
+      return { members, activeMembers, expiredMemberships, newMembers, inside, todayPayments, monthPayments, todayRefunds, monthRefunds, pendingInvoices, expiring, seatExpiring, recentPayments, recentRefunds, seats: operationalSeats.length, availableSeats };
+    });
+    const revenue = new Map<string, { month: string; amount: number }>();
+    for (let offset = -5; offset <= 0; offset++) {
+      const date = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + offset, 1));
+      const key = date.toISOString().slice(0, 7);
+      revenue.set(key, { month: new Intl.DateTimeFormat("en-IN", { month: "short", year: "2-digit", timeZone: "UTC" }).format(date), amount: 0 });
     }
-    for (const refund of recentRefunds) {
-      const key = refund.refundedAt.toISOString().slice(0, 7);
-      revenue.set(key, (revenue.get(key) ?? 0) - Number(refund.amount));
+    for (const payment of result.recentPayments) {
+      const key = dateKeyInTimeZone(payment.paidAt, env.LIBRARY_TIMEZONE).slice(0, 7);
+      const bucket = revenue.get(key);
+      if (bucket) bucket.amount += Number(payment.amount);
+    }
+    for (const refund of result.recentRefunds) {
+      const key = dateKeyInTimeZone(refund.refundedAt, env.LIBRARY_TIMEZONE).slice(0, 7);
+      const bucket = revenue.get(key);
+      if (bucket) bucket.amount -= Number(refund.amount);
     }
     ok(res, {
       stats: {
-        members,
-        activeMembers,
-        expiredMemberships: expired,
-        newMembers,
-        seats,
-        availableSeats,
-        allocatedSeats: seats - availableSeats,
-        inside,
-        titles,
-        copies,
-        issued,
-        overdue,
-        todayCollections:
-          Number(todayPayments._sum.amount ?? 0) -
-          Number(todayRefunds._sum.amount ?? 0),
-        monthlyCollections:
-          Number(monthPayments._sum.amount ?? 0) -
-          Number(monthRefunds._sum.amount ?? 0),
-        monthlyRefunds: Number(monthRefunds._sum.amount ?? 0),
-        unpaidFines:
-          Number(unpaidFines._sum.amount ?? 0) -
-          Number(unpaidFines._sum.paidAmount ?? 0),
+        members: result.members,
+        activeMembers: result.activeMembers,
+        expiredMemberships: result.expiredMemberships,
+        newMembers: result.newMembers,
+        seats: result.seats,
+        availableSeats: result.availableSeats,
+        allocatedSeats: result.seats - result.availableSeats,
+        inside: result.inside,
+        pendingAmount: Number(result.pendingInvoices._sum.total ?? 0) - Number(result.pendingInvoices._sum.paid ?? 0),
+        todayCollections: Number(result.todayPayments._sum.amount ?? 0) - Number(result.todayRefunds._sum.amount ?? 0),
+        monthlyCollections: Number(result.monthPayments._sum.amount ?? 0) - Number(result.monthRefunds._sum.amount ?? 0),
+        monthlyRefunds: Number(result.monthRefunds._sum.amount ?? 0),
       },
-      charts: {
-        revenue: [...revenue].map(([month, amount]) => ({ month, amount })),
-      },
-      alerts: { expiring, overdue: overdueItems },
+      charts: { revenue: [...revenue.values()] },
+      alerts: { expiring: result.expiring, seatExpiring: result.seatExpiring },
     });
   }),
 );

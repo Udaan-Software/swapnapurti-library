@@ -31,9 +31,37 @@ export function shiftTimingIssue(shift: { startMinutes: number; endMinutes: numb
   return undefined;
 }
 export function dateInTimeZone(now = new Date(), timeZone = "Asia/Kolkata") {
+  return new Date(`${dateKeyInTimeZone(now, timeZone)}T00:00:00.000Z`);
+}
+export function dateKeyInTimeZone(now = new Date(), timeZone = "Asia/Kolkata") {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
   const value = (type: Intl.DateTimeFormatPartTypes) => parts.find(part => part.type === type)!.value;
-  return new Date(`${value("year")}-${value("month")}-${value("day")}T00:00:00.000Z`);
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+function timeZoneOffsetMs(instant: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(instant);
+  const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find(part => part.type === type)!.value);
+  const representedAsUtc = Date.UTC(value("year"), value("month") - 1, value("day"), value("hour"), value("minute"), value("second"));
+  return representedAsUtc - Math.floor(instant.getTime() / 1000) * 1000;
+}
+function localMidnightInstant(calendarDate: Date, timeZone: string) {
+  const wallTime = Date.UTC(calendarDate.getUTCFullYear(), calendarDate.getUTCMonth(), calendarDate.getUTCDate());
+  let instant = new Date(wallTime);
+  instant = new Date(wallTime - timeZoneOffsetMs(instant, timeZone));
+  return new Date(wallTime - timeZoneOffsetMs(instant, timeZone));
+}
+export function timeZoneBoundaries(now = new Date(), timeZone = "Asia/Kolkata") {
+  const localDate = dateInTimeZone(now, timeZone);
+  const month = new Date(Date.UTC(localDate.getUTCFullYear(), localDate.getUTCMonth(), 1));
+  const nextDay = addDays(localDate, 1), nextMonth = addMonths(month, 1), sixMonthStart = addMonths(month, -5);
+  return {
+    dayStart: localMidnightInstant(localDate, timeZone),
+    nextDayStart: localMidnightInstant(nextDay, timeZone),
+    monthStart: localMidnightInstant(month, timeZone),
+    nextMonthStart: localMidnightInstant(nextMonth, timeZone),
+    sixMonthStart: localMidnightInstant(sixMonthStart, timeZone),
+    localDate,
+  };
 }
 export function fineForReturn(due: Date, returned: Date, dailyRatePaise: bigint) {
   return BigInt(Math.max(0, differenceInCalendarDays(returned, due))) * dailyRatePaise;

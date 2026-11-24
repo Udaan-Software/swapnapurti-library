@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
-  BookOpen,
   CalendarCheck,
   CreditCard,
   MapPin,
@@ -33,14 +32,11 @@ type MemberDetail = {
   subscriptions: any[];
   allocations: any[];
   attendances: any[];
-  loans: any[];
   payments: any[];
   invoices: any[];
-  fines: any[];
   financialSummary: {
     paidAmount: string;
     pendingAmount: string;
-    unpaidFines: string;
   };
 };
 type MembershipPlan = {
@@ -56,9 +52,7 @@ const tabs = [
   "Memberships",
   "Seat Allocation",
   "Attendance",
-  "Borrowed Books",
   "Payments",
-  "Fines",
   "History",
 ] as const;
 function libraryDateKey(now = new Date()) {
@@ -155,7 +149,7 @@ export function MemberProfilePage() {
                 </span>
               </div>
               <p className="mt-1 text-indigo-100">
-                {member.publicId} · {member.type.replaceAll("_", " ")}
+                {member.publicId} · {member.type === "BOOK" ? "CLASS" : member.type === "BOTH" ? "STUDY + CLASS" : member.type.replaceAll("_", " ")}
               </p>
               <div className="mt-4 flex flex-wrap gap-4 text-sm text-indigo-100">
                 <span className="flex items-center gap-1.5">
@@ -198,12 +192,10 @@ export function MemberProfilePage() {
             <Memberships items={member.subscriptions} />
           )}{" "}
           {tab === "Seat Allocation" && (
-            <Allocations items={member.allocations} />
+            <Allocations memberId={member.id} items={member.allocations} />
           )}{" "}
           {tab === "Attendance" && <Attendance items={member.attendances} />}{" "}
-          {tab === "Borrowed Books" && <Loans items={member.loans} />}{" "}
           {tab === "Payments" && <Payments items={member.payments} />}{" "}
-          {tab === "Fines" && <Fines items={member.fines} />}{" "}
           {tab === "History" && <History member={member} />}
         </div>
       </Card>
@@ -291,10 +283,10 @@ export function MemberProfilePage() {
                   <option key={plan.id} value={plan.id}>
                     {plan.name} · {money(plan.price)} ·{" "}
                     {plan.studyAccess && plan.bookAccess
-                      ? "Study + Book"
+                      ? "Study + Class"
                       : plan.studyAccess
                         ? "Study"
-                        : "Book"}
+                        : "Class"}
                   </option>
                 ))}
             </select>
@@ -372,18 +364,11 @@ function Overview({ member }: { member: MemberDetail }) {
   );
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <Summary
           icon={<CalendarCheck />}
           label="Current membership"
           value={active?.plan?.name ?? "No active plan"}
-        />
-        <Summary
-          icon={<BookOpen />}
-          label="Active book loans"
-          value={String(
-            member.loans.filter((x) => x.status === "ACTIVE").length,
-          )}
         />
         <Summary
           icon={<CreditCard />}
@@ -394,11 +379,6 @@ function Overview({ member }: { member: MemberDetail }) {
           icon={<CreditCard />}
           label="Pending invoices"
           value={money(member.financialSummary.pendingAmount)}
-        />
-        <Summary
-          icon={<CreditCard />}
-          label="Unpaid fines"
-          value={money(member.financialSummary.unpaidFines)}
         />
       </div>
       <div className="mt-4 rounded-2xl border border-[var(--border)] p-5">
@@ -491,23 +471,64 @@ function Memberships({ items }: { items: any[] }) {
     />
   );
 }
-function Allocations({ items }: { items: any[] }) {
+function Allocations({ memberId, items }: { memberId: string; items: any[] }) {
+  const [editing, setEditing] = useState<any | null>(null);
+  const [seatId, setSeatId] = useState("");
+  const qc = useQueryClient();
+  const startDate = editing?.startDate?.slice(0, 10) ?? "";
+  const endDate = editing?.endDate?.slice(0, 10) ?? "";
+  const { data: availableSeats = [], isFetching, error } = useQuery({
+    queryKey: ["reassign-seats", editing?.id],
+    queryFn: () => api<any[]>(`/seat-allocations/available-seats?memberId=${memberId}&startDate=${startDate}&endDate=${endDate}&allocationId=${editing.id}`),
+    enabled: Boolean(editing),
+    retry: false,
+  });
+  const reassign = useMutation({
+    mutationFn: () => api(`/seat-allocations/${editing.id}/reassign`, json("PATCH", { seatId })),
+    onSuccess: async () => {
+      toast.success("Seat allocation updated");
+      setEditing(null);
+      setSeatId("");
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["member", memberId] }),
+        qc.invalidateQueries({ queryKey: ["/study-rooms"] }),
+        qc.invalidateQueries({ queryKey: ["/seat-allocations/seat-map"] }),
+        qc.invalidateQueries({ queryKey: ["dashboard"] }),
+      ]);
+    },
+    onError: (mutationError) => toast.error(mutationError.message),
+  });
   return (
-    <List
-      items={items}
-      empty="No seat allocations"
-      render={(x) => (
-        <div className="flex flex-wrap justify-between gap-3">
-          <div>
-            <b>
-              {x.seat.room.name} · Seat {x.seat.number}
-            </b>
-            <p className="text-sm text-[var(--muted)]">{x.shift.name}</p>
+    <>
+      <List
+        items={items}
+        empty="No seat allocations"
+        render={(x) => (
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <b>Seat {x.seat.number}</b>
+              <p className="mt-1 text-sm text-[var(--muted)]">{new Date(x.startDate).toLocaleDateString("en-IN")} – {new Date(x.endDate).toLocaleDateString("en-IN")}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              {badge(x.status)}
+              {["ACTIVE", "UPCOMING"].includes(x.status) && <Button variant="ghost" onClick={() => { setEditing(x); setSeatId(""); }}><Pencil size={15}/> Change seat</Button>}
+            </div>
           </div>
-          {badge(x.status)}
-        </div>
-      )}
-    />
+        )}
+      />
+      <Modal open={Boolean(editing)} onOpenChange={(value) => { if (!value) { setEditing(null); setSeatId(""); } }} title={editing ? `Change Seat ${editing.seat.number}` : "Change seat"}>
+        <label className="text-sm font-semibold">
+          Available seat
+          <select className="input mt-2" value={seatId} onChange={(event) => setSeatId(event.target.value)} disabled={isFetching || Boolean(error)}>
+            <option value="">{isFetching ? "Checking available seats…" : error ? "Availability could not be checked" : "Select an available seat"}</option>
+            {availableSeats.map((seat) => <option key={seat.id} value={seat.id}>Seat {seat.number} · {String(seat.type).toLowerCase()}</option>)}
+          </select>
+        </label>
+        {!isFetching && !error && !availableSeats.length && <p className="mt-2 text-sm text-[var(--muted)]">No alternative seat is available for this complete allocation period.</p>}
+        {error && <p className="mt-2 text-sm font-medium text-rose-600">{error.message}</p>}
+        <div className="mt-5 flex justify-end gap-2"><Button variant="ghost" onClick={() => { setEditing(null); setSeatId(""); }}>Cancel</Button><Button onClick={() => reassign.mutate()} loading={reassign.isPending} disabled={!seatId}>Save seat</Button></div>
+      </Modal>
+    </>
   );
 }
 function Attendance({ items }: { items: any[] }) {
@@ -532,25 +553,6 @@ function Attendance({ items }: { items: any[] }) {
     />
   );
 }
-function Loans({ items }: { items: any[] }) {
-  return (
-    <List
-      items={items}
-      empty="No books borrowed"
-      render={(x) => (
-        <div className="flex flex-wrap justify-between gap-3">
-          <div>
-            <b>{x.copy.book.title}</b>
-            <p className="text-sm text-[var(--muted)]">
-              Due {new Date(x.dueDate).toLocaleDateString("en-IN")}
-            </p>
-          </div>
-          {badge(x.status)}
-        </div>
-      )}
-    />
-  );
-}
 function Payments({ items }: { items: any[] }) {
   return (
     <List
@@ -564,23 +566,6 @@ function Payments({ items }: { items: any[] }) {
               {new Date(x.paidAt).toLocaleString("en-IN")} ·{" "}
               {x.method.replaceAll("_", " ")}
             </p>
-          </div>
-          <b>{money(x.amount)}</b>
-        </div>
-      )}
-    />
-  );
-}
-function Fines({ items }: { items: any[] }) {
-  return (
-    <List
-      items={items}
-      empty="No fines recorded"
-      render={(x) => (
-        <div className="flex flex-wrap justify-between gap-3">
-          <div>
-            <b>{x.reason}</b>
-            <p className="text-sm text-[var(--muted)]">{badge(x.status)}</p>
           </div>
           <b>{money(x.amount)}</b>
         </div>
