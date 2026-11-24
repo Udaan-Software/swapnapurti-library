@@ -84,6 +84,7 @@ describe.sequential("administrator critical workflows", () => {
     const payment = { memberId: memberOne, invoiceId: invoice.body.data.id, amount: 1500, method: "CASH", idempotencyKey: "integration-payment-1" };
     const firstPayment = await post("/api/v1/payments", payment); expect(firstPayment.status).toBe(201);
     const repeatedPayment = await post("/api/v1/payments", payment); expect(repeatedPayment.status).toBe(200); expect(repeatedPayment.body.data.id).toBe(firstPayment.body.data.id);
+    const receipt = await agent.get(`/api/v1/payments/${firstPayment.body.data.id}/receipt`); expect(receipt.status).toBe(200); expect(receipt.body.data.receiptNo).toBe(firstPayment.body.data.receiptNo); expect(receipt.body.data.member.publicId).toBeTruthy(); expect(receipt.body.data.netAmount).toBe(1500);
     const afterPayment = await agent.get(`/api/v1/members/${memberOne}`); expect(afterPayment.body.data.financialSummary.paidAmount).toBe("1500.00"); expect(afterPayment.body.data.financialSummary.pendingAmount).toBe("0.00");
     expect((await post("/api/v1/expenses", { category: "Maintenance", description: "Integration expense", amount: 100, expenseDate: new Date().toISOString().slice(0, 10), method: "CASH" })).status).toBe(201);
     const dashboard = await agent.get("/api/v1/dashboard"); expect(dashboard.status).toBe(200); expect(dashboard.body.data.stats.members).toBe(2);

@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Phone, Plus, UserRound } from "lucide-react";
+import { ArrowRight, Phone, Plus, RotateCcw, UserRound } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { api, json } from "../lib/api";
-import { Button, Card, Empty, Modal, PageHeading, SearchBox } from "../components/ui";
+import { api, apiPage, json } from "../lib/api";
+import { Button, Card, Empty, Modal, PageHeading, Pagination, SearchBox } from "../components/ui";
 import { money } from "./ResourcePage";
 
 type Member = {
@@ -50,6 +50,11 @@ const accessLabel = (plan: Plan) =>
 export function MembersPage() {
   const [search, setSearch] = useState("");
   const [type, setType] = useState("");
+  const [status, setStatus] = useState("");
+  const [registeredFrom, setRegisteredFrom] = useState("");
+  const [registeredTo, setRegisteredTo] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [open, setOpen] = useState(false);
   const [planId, setPlanId] = useState("");
   const [startDate, setStartDate] = useState(today());
@@ -57,15 +62,19 @@ export function MembersPage() {
   const [discount, setDiscount] = useState(0);
   const [seatId, setSeatId] = useState("");
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
-    queryKey: ["members", search, type],
-    queryFn: () => api<Member[]>(`/members?search=${encodeURIComponent(search)}${type ? `&type=${type}` : ""}`),
+  const { data: memberPage, isLoading } = useQuery({
+    queryKey: ["members", search, type, status, registeredFrom, registeredTo, page, pageSize],
+    queryFn: () => apiPage<Member[]>(`/members?page=${page}&pageSize=${pageSize}&search=${encodeURIComponent(search)}${type ? `&type=${type}` : ""}${status ? `&status=${status}` : ""}${registeredFrom ? `&registeredFrom=${registeredFrom}` : ""}${registeredTo ? `&registeredTo=${registeredTo}` : ""}`),
   });
   const { data: plans = [] } = useQuery({
     queryKey: ["/membership-plans"],
     queryFn: () => api<Plan[]>("/membership-plans"),
   });
   const selectedPlan = plans.find((plan) => plan.id === planId);
+  const members = memberPage?.data ?? [];
+  const memberTotal = memberPage?.meta.total ?? 0;
+  const hasMemberFilters = Boolean(search || type || status || registeredFrom || registeredTo);
+  const clearMemberFilters = () => { setSearch(""); setType(""); setStatus(""); setRegisteredFrom(""); setRegisteredTo(""); setPage(1); };
   const { data: quote, isFetching: checkingQuote, error: quoteError } = useQuery({
     queryKey: ["membership-quote", planId, startDate, endDate, discount],
     queryFn: () => api<MembershipQuote>(`/membership-plans/${encodeURIComponent(planId)}/quote?startDate=${startDate}${endDate ? `&endDate=${endDate}` : ""}&discount=${discount}`),
@@ -122,25 +131,38 @@ export function MembersPage() {
         action={<Button onClick={() => setOpen(true)}><Plus size={17}/> Add member</Button>}
       />
       <Card>
-        <div className="flex flex-wrap gap-3 border-b border-[var(--border)] p-4">
-          <div className="min-w-[240px] flex-1">
-            <SearchBox value={search} onChange={setSearch} placeholder="Search name, member ID or mobile…"/>
+        <div className="border-b border-[var(--border)] p-4">
+          <div className="flex flex-nowrap items-center gap-2 overflow-hidden">
+          <div className="min-w-0 flex-1 basis-[220px]">
+            <SearchBox value={search} onChange={value=>{setSearch(value);setPage(1)}} placeholder="Search name, member ID or mobile…"/>
           </div>
-          <select aria-label="Filter member type" className="input w-full sm:w-auto" value={type} onChange={(event) => setType(event.target.value)}>
+          <select aria-label="Filter member type" className="input !w-[130px] shrink-0" value={type} onChange={(event) => {setType(event.target.value);setPage(1)}}>
             <option value="">All member types</option>
             <option value="STUDY">Study</option>
             <option value="BOOK">Class</option>
             <option value="BOTH">Study + Class</option>
           </select>
+          <select aria-label="Filter member status" className="input !w-[110px] shrink-0" value={status} onChange={(event) => {setStatus(event.target.value);setPage(1)}}>
+            <option value="">All statuses</option>
+            <option value="ACTIVE">Active</option>
+            <option value="INACTIVE">Inactive</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="ARCHIVED">Archived</option>
+          </select>
+          <label className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-[var(--muted)]"><span>From</span><input aria-label="Registered from" className="input !w-[115px]" type="date" value={registeredFrom} max={registeredTo || undefined} onChange={(event) => {setRegisteredFrom(event.target.value);setPage(1)}}/></label>
+          <label className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-[var(--muted)]"><span>To</span><input aria-label="Registered to" className="input !w-[115px]" type="date" value={registeredTo} min={registeredFrom || undefined} onChange={(event) => {setRegisteredTo(event.target.value);setPage(1)}}/></label>
+          {hasMemberFilters && <button type="button" className="btn btn-ghost shrink-0 whitespace-nowrap px-3" onClick={clearMemberFilters}><RotateCcw size={15}/> Clear</button>}
+          </div>
+          <p className="mt-3 text-xs text-[var(--muted)]"><b className="text-[var(--text)]">{memberTotal}</b> matching member{memberTotal === 1 ? "" : "s"}</p>
         </div>
         <div className="hidden overflow-x-auto md:block">
           <table className="w-full min-w-[1120px] text-left">
             <thead><tr className="border-b border-[var(--border)] text-xs uppercase tracking-wider text-[var(--muted)]"><th className="px-5 py-3">Member</th><th className="px-5 py-3">Contact</th><th className="px-5 py-3">Type</th><th className="px-5 py-3">Current membership</th><th className="px-5 py-3">Paid</th><th className="px-5 py-3">Pending</th><th className="px-5 py-3">Status</th><th className="px-5 py-3">Registered</th><th/></tr></thead>
-            <tbody className="divide-y divide-[var(--border)]">{data?.map((member) => <tr key={member.id} className="hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20"><td className="px-5 py-4"><MemberIdentity member={member}/></td><td className="px-5 py-4"><p className="flex items-center gap-1.5 text-sm"><Phone size={13}/>{member.mobile}</p><p className="mt-1 text-xs text-[var(--muted)]">{member.email || "No email"}</p></td><td className="px-5 py-4"><Tag value={member.type}/></td><td className="px-5 py-4"><MembershipSummary member={member}/></td><td className="px-5 py-4 text-sm font-bold text-emerald-600">{money(member.financialSummary.paidAmount)}</td><td className="px-5 py-4"><p className="text-sm font-bold text-amber-600">{money(member.financialSummary.pendingAmount)}</p></td><td className="px-5 py-4"><Tag value={member.status}/></td><td className="px-5 py-4 text-sm text-[var(--muted)]">{new Date(member.registrationDate).toLocaleDateString("en-IN")}</td><td><Link aria-label={`View ${member.fullName}`} className="btn btn-ghost p-2" to={`/members/${member.id}`}><ArrowRight size={18}/></Link></td></tr>)}</tbody>
+            <tbody className="divide-y divide-[var(--border)]">{members.map((member) => <tr key={member.id} className="hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20"><td className="px-5 py-4"><MemberIdentity member={member}/></td><td className="px-5 py-4"><p className="flex items-center gap-1.5 text-sm"><Phone size={13}/>{member.mobile}</p><p className="mt-1 text-xs text-[var(--muted)]">{member.email || "No email"}</p></td><td className="px-5 py-4"><Tag value={member.type}/></td><td className="px-5 py-4"><MembershipSummary member={member}/></td><td className="px-5 py-4 text-sm font-bold text-emerald-600">{money(member.financialSummary.paidAmount)}</td><td className="px-5 py-4"><p className="text-sm font-bold text-amber-600">{money(member.financialSummary.pendingAmount)}</p></td><td className="px-5 py-4"><Tag value={member.status}/></td><td className="px-5 py-4 text-sm text-[var(--muted)]">{new Date(member.registrationDate).toLocaleDateString("en-IN")}</td><td><Link aria-label={`View ${member.fullName}`} className="btn btn-ghost p-2" to={`/members/${member.id}`}><ArrowRight size={18}/></Link></td></tr>)}</tbody>
           </table>
         </div>
-        <div className="divide-y divide-[var(--border)] md:hidden">{data?.map((member) => <article key={member.id} className="p-4"><div className="flex items-start gap-3"><MemberIdentity member={member}/><Link aria-label={`View ${member.fullName}`} className="btn btn-ghost ml-auto p-2" to={`/members/${member.id}`}><ArrowRight size={18}/></Link></div><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><div><p className="text-xs text-[var(--muted)]">Contact</p><p className="mt-1">{member.mobile}</p></div><div><p className="text-xs text-[var(--muted)]">Type</p><div className="mt-1"><Tag value={member.type}/></div></div><div className="col-span-2"><p className="text-xs text-[var(--muted)]">Current membership</p><div className="mt-1"><MembershipSummary member={member}/></div></div><div><p className="text-xs text-[var(--muted)]">Paid</p><p className="mt-1 font-bold text-emerald-600">{money(member.financialSummary.paidAmount)}</p></div><div><p className="text-xs text-[var(--muted)]">Pending invoices</p><p className="mt-1 font-bold text-amber-600">{money(member.financialSummary.pendingAmount)}</p></div></div></article>)}</div>
-        {!isLoading && !data?.length && <Empty title="No members found" message="Register your first member or try a different search."/>}
+        <div className="divide-y divide-[var(--border)] md:hidden">{members.map((member) => <article key={member.id} className="p-4"><div className="flex items-start gap-3"><MemberIdentity member={member}/><Link aria-label={`View ${member.fullName}`} className="btn btn-ghost ml-auto p-2" to={`/members/${member.id}`}><ArrowRight size={18}/></Link></div><div className="mt-4 grid grid-cols-2 gap-3 text-sm"><div><p className="text-xs text-[var(--muted)]">Contact</p><p className="mt-1">{member.mobile}</p></div><div><p className="text-xs text-[var(--muted)]">Type</p><div className="mt-1"><Tag value={member.type}/></div></div><div className="col-span-2"><p className="text-xs text-[var(--muted)]">Current membership</p><div className="mt-1"><MembershipSummary member={member}/></div></div><div><p className="text-xs text-[var(--muted)]">Paid</p><p className="mt-1 font-bold text-emerald-600">{money(member.financialSummary.paidAmount)}</p></div><div><p className="text-xs text-[var(--muted)]">Pending invoices</p><p className="mt-1 font-bold text-amber-600">{money(member.financialSummary.pendingAmount)}</p></div></div></article>)}</div>
+        {!isLoading && !members.length && <Empty title="No members found" message={hasMemberFilters ? "Try changing or clearing the filters." : "Register your first member."}/>}<Pagination page={page} pageSize={pageSize} total={memberTotal} onPageChange={setPage} onPageSizeChange={size=>{setPageSize(size);setPage(1)}}/>
       </Card>
       <Modal open={open} onOpenChange={(value) => value ? setOpen(true) : closeRegistration()} title="Register member">
         <form onSubmit={(event) => { event.preventDefault(); mutation.mutate(new FormData(event.currentTarget)); }} className="grid gap-4 sm:grid-cols-2">

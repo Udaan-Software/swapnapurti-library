@@ -21,8 +21,7 @@ type Settings = {
     phone?: string;
     email?: string;
   };
-  books?: { finePerDay?: string; reservationDays?: number };
-  notifications?: { seatExpiryDays?: number };
+  notifications?: { seatExpiryDays?: number; membershipExpiryDays?: number; paymentDueDays?: number };
 };
 declare global {
   interface Window {
@@ -163,15 +162,8 @@ export function SettingsPage() {
         }),
       );
       await api(
-        "/settings/books",
-        json("PUT", {
-          finePerDay: form.get("finePerDay"),
-          reservationDays: Number(form.get("reservationDays")),
-        }),
-      );
-      await api(
         "/settings/notifications",
-        json("PUT", { seatExpiryDays: Number(form.get("seatExpiryDays")) }),
+        json("PUT", { seatExpiryDays: Number(form.get("seatExpiryDays")), membershipExpiryDays: Number(form.get("membershipExpiryDays")), paymentDueDays: Number(form.get("paymentDueDays")) }),
       );
     },
     onSuccess: () => {
@@ -189,7 +181,7 @@ export function SettingsPage() {
       />
       <div className="grid gap-5 lg:grid-cols-[1.4fr_1fr]">
         <Card className="p-6">
-          <h3 className="font-bold">Library, book and reminder settings</h3>
+          <h3 className="font-bold">Library and reminder settings</h3>
           {data && (
             <form
               className="mt-5 grid gap-4 sm:grid-cols-2"
@@ -234,27 +226,6 @@ export function SettingsPage() {
                 />
               </label>
               <label className="text-sm font-semibold">
-                Overdue fine / day
-                <input
-                  name="finePerDay"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className="input mt-2"
-                  defaultValue={data.books?.finePerDay ?? "5.00"}
-                />
-              </label>
-              <label className="text-sm font-semibold">
-                Reservation validity (days)
-                <input
-                  name="reservationDays"
-                  type="number"
-                  min="1"
-                  className="input mt-2"
-                  defaultValue={data.books?.reservationDays ?? 2}
-                />
-              </label>
-              <label className="text-sm font-semibold sm:col-span-2">
                 Seat-expiry reminder (days before)
                 <input
                   name="seatExpiryDays"
@@ -265,11 +236,9 @@ export function SettingsPage() {
                   defaultValue={data.notifications?.seatExpiryDays ?? 3}
                   required
                 />
-                <span className="mt-1 block text-xs font-normal text-[var(--muted)]">
-                  One in-app reminder is created per allocation within this
-                  window.
-                </span>
               </label>
+              <label className="text-sm font-semibold">Membership-expiry reminder (days before)<input name="membershipExpiryDays" type="number" min="1" max="30" className="input mt-2" defaultValue={data.notifications?.membershipExpiryDays ?? 7} required/></label>
+              <label className="text-sm font-semibold sm:col-span-2">Payment reminder (days before due date)<input name="paymentDueDays" type="number" min="1" max="30" className="input mt-2" defaultValue={data.notifications?.paymentDueDays ?? 1} required/><span className="mt-1 block text-xs font-normal text-[var(--muted)]">The background service checks every 15 minutes and creates one deduplicated in-app reminder per event.</span></label>
               <div className="sm:col-span-2">
                 <Button type="submit" loading={mutation.isPending}>
                   Save settings

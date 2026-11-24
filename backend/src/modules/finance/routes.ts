@@ -8,6 +8,28 @@ import { audit } from "../../services/audit.js";
 export const paymentsRouter = Router(); export const expensesRouter = Router(); export const finesRouter = Router();
 paymentsRouter.get("/", asyncHandler(async (_req, res) => ok(res, await prisma.payment.findMany({ include: { member: true, refunds: true, allocations: { include: { invoice: true } } }, orderBy: { paidAt: "desc" }, take: 200 }))));
 paymentsRouter.get("/invoices", asyncHandler(async (_req, res) => ok(res, await prisma.invoice.findMany({ include: { member: true, items: true }, orderBy: { createdAt: "desc" }, take: 200 }))));
+paymentsRouter.get("/:id/receipt", asyncHandler(async (req, res) => {
+  const [payment, librarySetting] = await Promise.all([
+    prisma.payment.findUnique({ where: { id: String(req.params.id) }, include: { member: true, refunds: { orderBy: { refundedAt: "asc" } }, allocations: { include: { invoice: { include: { items: true } } } } } }),
+    prisma.appSetting.findUnique({ where: { key: "library" } }),
+  ]);
+  if (!payment) throw new AppError(404, "Payment receipt not found.");
+  const library = librarySetting?.value && typeof librarySetting.value === "object" && !Array.isArray(librarySetting.value) ? librarySetting.value as Record<string, unknown> : {};
+  const refundedAmount = payment.refunds.reduce((sum, refund) => sum + Number(refund.amount), 0);
+  ok(res, {
+    receiptNo: payment.receiptNo,
+    paidAt: payment.paidAt,
+    amount: Number(payment.amount),
+    refundedAmount,
+    netAmount: Number(payment.amount) - refundedAmount,
+    method: payment.method,
+    reference: payment.reference,
+    member: { publicId: payment.member.publicId, fullName: payment.member.fullName, mobile: payment.member.mobile, email: payment.member.email },
+    library: { name: String(library.name ?? "Swapnapurti Library"), address: String(library.address ?? ""), phone: String(library.phone ?? ""), email: String(library.email ?? ""), currency: String(library.currency ?? "INR") },
+    allocations: payment.allocations.map(allocation => ({ amount: Number(allocation.amount), invoiceNo: allocation.invoice.invoiceNo, description: allocation.invoice.items.map(item => item.description).join(", ") || "Membership payment" })),
+    refunds: payment.refunds.map(refund => ({ amount: Number(refund.amount), reason: refund.reason, refundedAt: refund.refundedAt })),
+  });
+}));
 paymentsRouter.post("/invoices", asyncHandler(async (req, res) => { const body = z.object({ memberId: z.string().uuid(), dueDate: z.string().date().optional(), items: z.array(z.object({ type: z.enum(["SUBSCRIPTION", "OVERDUE_FINE", "LOST_BOOK", "DAMAGED_BOOK", "SECURITY_DEPOSIT", "OTHER"]), description: z.string().min(2), quantity: z.number().int().positive().default(1), unitAmount: z.coerce.number().nonnegative() })).min(1) }).parse(req.body); const invoice = await prisma.$transaction(async tx => { const rows = await tx.$queryRaw<Array<{ value: bigint }>>`SELECT nextval('invoice_number_seq') AS value`; const total = body.items.reduce((sum, i) => sum + i.quantity * i.unitAmount, 0); return tx.invoice.create({ data: { invoiceNo: `SWP-INV-${String(rows[0]!.value).padStart(6, "0")}`, memberId: body.memberId, total: total.toFixed(2), dueDate: body.dueDate ? new Date(body.dueDate) : null, items: { create: body.items.map(i => ({ ...i, unitAmount: i.unitAmount.toFixed(2), total: (i.quantity * i.unitAmount).toFixed(2) })) } }, include: { items: true } }); }); await audit(req, "INVOICE_CREATED", "Invoice", invoice.id, { total: invoice.total.toString() }); ok(res.status(201), invoice); }));
 paymentsRouter.post("/", asyncHandler(async (req, res) => {
   const body = z.object({ memberId: z.string().uuid(), invoiceId: z.string().uuid(), amount: z.coerce.number().positive(), method: z.nativeEnum(PaymentMethod), reference: z.string().optional(), idempotencyKey: z.string().max(100).optional() }).parse(req.body);

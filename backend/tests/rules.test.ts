@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dateInTimeZone, fineForReturn, periodsCoverRange, periodsOverlap, shiftTimingIssue, shiftsOverlap, subscriptionEndDate, timeZoneBoundaries } from "../src/services/rules.js";
+import { reminderSettings } from "../src/services/reminders.js";
 
 describe("subscription date policy", () => {
   it("uses inclusive end dates", () => expect(subscriptionEndDate(new Date("2026-01-10T00:00:00Z"), 1, "MONTH").toISOString().slice(0, 10)).toBe("2026-02-09"));
@@ -16,4 +17,8 @@ describe("allocation conflicts", () => {
 });
 describe("fine calculations", () => {
   it("uses integer paise and never charges early returns", () => { expect(fineForReturn(new Date("2026-01-10"), new Date("2026-01-13"), 500n)).toBe(1500n); expect(fineForReturn(new Date("2026-01-10"), new Date("2026-01-09"), 500n)).toBe(0n); });
+});
+describe("scheduled reminder policy",()=>{
+  it("uses safe defaults",()=>expect(reminderSettings(undefined)).toEqual({seatExpiryDays:3,membershipExpiryDays:7,paymentDueDays:1}));
+  it("accepts configured windows and rejects unsafe values",()=>expect(reminderSettings({seatExpiryDays:5,membershipExpiryDays:14,paymentDueDays:99})).toEqual({seatExpiryDays:5,membershipExpiryDays:14,paymentDueDays:1}));
 });

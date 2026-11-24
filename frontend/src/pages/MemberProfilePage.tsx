@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -9,7 +9,7 @@ import {
   Phone,
   UserRound,
 } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api, json } from "../lib/api";
 import { Button, Card, Empty, Modal } from "../components/ui";
@@ -68,9 +68,13 @@ function libraryDateKey(now = new Date()) {
 }
 export function MemberProfilePage() {
   const { id } = useParams();
-  const [tab, setTab] = useState<(typeof tabs)[number]>("Overview");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const validRequestedTab = tabs.includes(requestedTab as (typeof tabs)[number]) ? requestedTab as (typeof tabs)[number] : "Overview";
+  const [tab, setTab] = useState<(typeof tabs)[number]>(validRequestedTab);
   const [editOpen, setEditOpen] = useState(false);
   const qc = useQueryClient();
+  useEffect(() => setTab(validRequestedTab), [validRequestedTab]);
   const {
     data: member,
     isLoading,
@@ -178,7 +182,7 @@ export function MemberProfilePage() {
             {tabs.map((item) => (
               <button
                 key={item}
-                onClick={() => setTab(item)}
+                onClick={() => { setTab(item); setSearchParams(item === "Overview" ? {} : { tab: item }, { replace: true }); }}
                 className={`border-b-2 px-4 py-3 text-sm font-semibold ${tab === item ? "border-indigo-600 text-indigo-600" : "border-transparent text-[var(--muted)] hover:text-[var(--text)]"}`}
               >
                 {item}
@@ -495,6 +499,7 @@ function Allocations({ memberId, items }: { memberId: string; items: any[] }) {
         qc.invalidateQueries({ queryKey: ["/seat-allocations/seat-map"] }),
         qc.invalidateQueries({ queryKey: ["dashboard"] }),
       ]);
+      await qc.invalidateQueries();
     },
     onError: (mutationError) => toast.error(mutationError.message),
   });

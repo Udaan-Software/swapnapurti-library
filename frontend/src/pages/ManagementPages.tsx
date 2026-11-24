@@ -6,12 +6,14 @@ import {
   LogOut,
   Pencil,
   Plus,
+  Printer,
   RotateCcw,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, json } from "../lib/api";
 import { Button, Card, Modal, PageHeading } from "../components/ui";
+import { printReceipt, type PaymentReceipt } from "../lib/receipt";
 import { ResourcePage, badge, money } from "./ResourcePage";
 
 type Item = { id: string; [key: string]: any };
@@ -1507,10 +1509,12 @@ export function FinesPage() {
 export function PaymentsPage() {
   const [invoiceOpen, setInvoiceOpen] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [receiptId, setReceiptId] = useState("");
   const members = useItems("/members?pageSize=100");
   const invoices = useItems("/payments/invoices").filter(
     (x) => Number(x.total) > Number(x.paid) && x.status !== "VOID",
   );
+  const { data: receipt, isFetching: receiptLoading, error: receiptError } = useQuery({ queryKey: ["payment-receipt", receiptId], queryFn: () => api<PaymentReceipt>(`/payments/${receiptId}/receipt`), enabled: Boolean(receiptId) });
   const qc = useQueryClient();
   const refund = useMutation({
     mutationFn: ({
@@ -1542,25 +1546,7 @@ export function PaymentsPage() {
             <Button onClick={() => setPaymentOpen(true)}>Record payment</Button>
           </div>
         }
-        rowAction={(payment) =>
-          Number(payment.amount) >
-          payment.refunds.reduce(
-            (sum: number, item: Item) => sum + Number(item.amount),
-            0,
-          ) ? (
-            <Button
-              variant="ghost"
-              onClick={() => {
-                const amount = Number(window.prompt("Refund amount"));
-                if (!amount) return;
-                const reason = window.prompt("Refund reason");
-                if (reason) refund.mutate({ id: payment.id, amount, reason });
-              }}
-            >
-              Refund
-            </Button>
-          ) : null
-        }
+        rowAction={(payment) => <div className="flex justify-end gap-1"><Button variant="ghost" onClick={()=>setReceiptId(payment.id)}><Printer size={15}/> Receipt</Button>{Number(payment.amount)>payment.refunds.reduce((sum:number,item:Item)=>sum+Number(item.amount),0)&&<Button variant="ghost" onClick={()=>{const amount=Number(window.prompt("Refund amount"));if(!amount)return;const reason=window.prompt("Refund reason");if(reason)refund.mutate({id:payment.id,amount,reason})}}>Refund</Button>}</div>}
         columns={[
           { label: "Receipt", value: (r) => <b>{r.receiptNo}</b> },
           { label: "Member", value: (r) => r.member.fullName },
@@ -1582,6 +1568,11 @@ export function PaymentsPage() {
           },
         ]}
       />
+      <Modal open={Boolean(receiptId)} onOpenChange={open=>!open&&setReceiptId("")} title="Payment receipt">
+        {receiptLoading&&<p className="py-8 text-center text-sm text-[var(--muted)]">Preparing receipt…</p>}
+        {receiptError&&<p className="py-8 text-center text-sm text-rose-600">{receiptError.message}</p>}
+        {receipt&&<div className="space-y-5"><div className="rounded-xl border border-[var(--border)] p-5"><div className="flex flex-wrap justify-between gap-4 border-b border-[var(--border)] pb-4"><div><h3 className="text-lg font-extrabold">{receipt.library.name}</h3><p className="mt-1 text-xs text-[var(--muted)]">{receipt.library.address}</p></div><div className="text-right"><b>{receipt.receiptNo}</b><p className="text-xs text-[var(--muted)]">{new Date(receipt.paidAt).toLocaleString("en-IN")}</p></div></div><div className="grid gap-3 py-4 sm:grid-cols-2"><div><p className="text-xs text-[var(--muted)]">Member</p><b>{receipt.member.fullName}</b><p className="text-xs">{receipt.member.publicId}</p></div><div><p className="text-xs text-[var(--muted)]">Payment method</p><b>{receipt.method.replaceAll("_"," ")}</b>{receipt.reference&&<p className="text-xs">{receipt.reference}</p>}</div></div>{receipt.allocations.map(item=><div key={item.invoiceNo} className="flex justify-between gap-4 border-t border-[var(--border)] py-3 text-sm"><div><b>{item.invoiceNo}</b><p className="text-xs text-[var(--muted)]">{item.description}</p></div><b>{money(item.amount)}</b></div>)}<div className="flex justify-between border-t-2 border-[var(--border)] pt-3"><b>Net receipt</b><b className="text-lg text-indigo-600">{money(receipt.netAmount)}</b></div>{receipt.refundedAmount>0&&<p className="mt-2 text-right text-xs text-rose-600">Refunded: {money(receipt.refundedAmount)}</p>}</div><div className="flex justify-end gap-2"><Button variant="ghost" onClick={()=>setReceiptId("")}>Close</Button><Button onClick={()=>{try{printReceipt(receipt)}catch(error){toast.error(error instanceof Error?error.message:"Unable to print receipt")}}}><Printer size={16}/> Print / Save PDF</Button></div></div>}
+      </Modal>
       <ActionForm
         open={invoiceOpen}
         onClose={() => setInvoiceOpen(false)}

@@ -1,13 +1,15 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
-import { Card, PageHeading } from "../components/ui";
+import { Card, Empty, Modal, PageHeading } from "../components/ui";
 import { Users, Armchair, IndianRupee, UserCheck, AlertTriangle, ArrowUpRight, CreditCard, CalendarClock } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { format } from "date-fns";
 
 type DashboardData = {
   stats: {
+    members: number;
     activeMembers: number;
     newMembers: number;
     seats: number;
@@ -20,26 +22,35 @@ type DashboardData = {
   };
   charts: { revenue: { month: string; amount: number }[] };
   alerts: {
-    expiring: Array<{ id: string; endDate: string; member: { fullName: string } }>;
-    seatExpiring: Array<{ id: string; endDate: string; member: { fullName: string }; seat: { number: string } }>;
+    expiring: Array<{ id: string; endDate: string; member: { id: string; fullName: string } }>;
+    seatExpiring: Array<{ id: string; endDate: string; member: { id: string; fullName: string }; seat: { number: string } }>;
   };
 };
+type DetailMetric = "active-members" | "available-seats" | "currently-inside" | "pending-amount" | "expired-memberships" | "today-collection";
+type DetailRow = { id: string; title: string; subtitle: string; amount?: number; to?: string };
 const money = (value: number) => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
 
 export function DashboardPage() {
+  const navigate = useNavigate();
+  const [detail, setDetail] = useState<{ metric: DetailMetric; title: string } | null>(null);
   const { data, isLoading, error } = useQuery({
     queryKey: ["dashboard"],
     queryFn: () => api<DashboardData>("/dashboard"),
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
+  const { data: detailRows = [], isLoading: detailsLoading, error: detailsError } = useQuery({
+    queryKey: ["dashboard-details", detail?.metric],
+    queryFn: () => api<DetailRow[]>(`/dashboard/details/${detail!.metric}`),
+    enabled: Boolean(detail),
+  });
   const stats = [
-    { label: "Active members", value: data?.stats.activeMembers, sub: data ? `${data.stats.newMembers} new this month` : "Registered active profiles", icon: Users, tone: "bg-indigo-50 text-indigo-600" },
-    { label: "Available seats", value: data?.stats.availableSeats, sub: data ? `of ${data.stats.seats} operational seats` : "Current availability", icon: Armchair, tone: "bg-cyan-50 text-cyan-700" },
-    { label: "Currently inside", value: data?.stats.inside, sub: "Live attendance", icon: UserCheck, tone: "bg-emerald-50 text-emerald-600" },
-    { label: "Pending amount", value: data ? money(data.stats.pendingAmount) : undefined, sub: "Outstanding membership invoices", icon: CreditCard, tone: "bg-rose-50 text-rose-600" },
-    { label: "Expired memberships", value: data?.stats.expiredMemberships, sub: "Members requiring renewal", icon: CalendarClock, tone: "bg-violet-50 text-violet-600" },
-    { label: "Today's collection", value: data ? money(data.stats.todayCollections) : undefined, sub: data ? `${money(data.stats.monthlyCollections)} this month` : "Net recorded payments", icon: IndianRupee, tone: "bg-fuchsia-50 text-fuchsia-600" },
+    { metric: "active-members" as const, label: "Active members", value: data?.stats.activeMembers, sub: data ? `${data.stats.activeMembers} of ${data.stats.members} total · ${data.stats.newMembers} new this month` : "Current memberships", icon: Users, tone: "bg-indigo-50 text-indigo-600" },
+    { metric: "available-seats" as const, label: "Available seats", value: data?.stats.availableSeats, sub: data ? `of ${data.stats.seats} operational seats` : "Current availability", icon: Armchair, tone: "bg-cyan-50 text-cyan-700" },
+    { metric: "currently-inside" as const, label: "Currently inside", value: data?.stats.inside, sub: "Live attendance", icon: UserCheck, tone: "bg-emerald-50 text-emerald-600" },
+    { metric: "pending-amount" as const, label: "Pending amount", value: data ? money(data.stats.pendingAmount) : undefined, sub: "Outstanding membership invoices", icon: CreditCard, tone: "bg-rose-50 text-rose-600" },
+    { metric: "expired-memberships" as const, label: "Expired memberships", value: data?.stats.expiredMemberships, sub: "Members requiring renewal", icon: CalendarClock, tone: "bg-violet-50 text-violet-600" },
+    { metric: "today-collection" as const, label: "Today's collection", value: data ? money(data.stats.todayCollections) : undefined, sub: data ? `${money(data.stats.monthlyCollections)} this month` : "Net recorded payments", icon: IndianRupee, tone: "bg-fuchsia-50 text-fuchsia-600" },
   ];
   const quick = [
     { to: "/members", label: "Add member" },
@@ -52,12 +63,14 @@ export function DashboardPage() {
       title: item.member.fullName,
       detail: `Membership expires ${format(new Date(item.endDate), "dd MMM")}`,
       tone: "bg-amber-50 text-amber-600",
+      to: `/members/${item.member.id}?tab=Memberships`,
     })),
     ...(data?.alerts.seatExpiring ?? []).map((item) => ({
       id: `seat-${item.id}`,
       title: item.member.fullName,
       detail: `Seat ${item.seat.number} allocation ends ${format(new Date(item.endDate), "dd MMM")}`,
       tone: "bg-rose-50 text-rose-600",
+      to: `/members/${item.member.id}?tab=Seat%20Allocation`,
     })),
   ].slice(0, 6);
   return (
@@ -66,7 +79,7 @@ export function DashboardPage() {
       {error && <Card className="mb-5 border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">Dashboard data could not be loaded. Please retry or check the server connection.</Card>}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {stats.map((stat) => (
-          <Card key={stat.label} className="group p-5">
+          <button key={stat.label} type="button" onClick={() => stat.metric === "available-seats" ? navigate("/seats") : setDetail({ metric: stat.metric, title: stat.label })} className="surface group rounded-2xl p-5 text-left transition hover:-translate-y-1 hover:border-indigo-300 hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" aria-label={stat.metric === "available-seats" ? "Open live seats" : `View ${stat.label} details`}>
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm font-medium text-[var(--muted)]">{stat.label}</p>
@@ -75,7 +88,7 @@ export function DashboardPage() {
               </div>
               <div className={`grid h-11 w-11 place-items-center rounded-xl ${stat.tone}`}><stat.icon size={21}/></div>
             </div>
-          </Card>
+          </button>
         ))}
       </div>
       <Card className="mt-5 p-4">
@@ -106,12 +119,18 @@ export function DashboardPage() {
         <Card className="overflow-hidden">
           <div className="border-b border-[var(--border)] p-5"><h3 className="font-bold">Needs attention</h3><p className="text-sm text-[var(--muted)]">Membership and seat expiries</p></div>
           <div className="divide-y divide-[var(--border)]">
-            {attention.map((item) => <div key={item.id} className="flex items-center gap-3 p-4"><div className={`grid h-9 w-9 place-items-center rounded-xl ${item.tone}`}><AlertTriangle size={17}/></div><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.title}</p><p className="truncate text-xs text-[var(--muted)]">{item.detail}</p></div><ArrowUpRight size={16} className="text-[var(--muted)]"/></div>)}
+            {attention.map((item) => <Link key={item.id} to={item.to} className="flex items-center gap-3 p-4 transition hover:bg-indigo-50/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 dark:hover:bg-indigo-950/20"><div className={`grid h-9 w-9 place-items-center rounded-xl ${item.tone}`}><AlertTriangle size={17}/></div><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{item.title}</p><p className="truncate text-xs text-[var(--muted)]">{item.detail}</p></div><ArrowUpRight size={16} className="text-[var(--muted)]"/></Link>)}
             {!attention.length && !isLoading && !error && <div className="p-10 text-center text-sm text-[var(--muted)]">Everything looks clear.</div>}
             {isLoading && <div className="p-10 text-center text-sm text-[var(--muted)]">Checking current alerts…</div>}
           </div>
         </Card>
       </div>
+      <Modal open={Boolean(detail)} onOpenChange={(open) => { if (!open) setDetail(null); }} title={detail ? `${detail.title} details` : "Dashboard details"}>
+        {detailsLoading && <p className="py-8 text-center text-sm text-[var(--muted)]">Loading current records…</p>}
+        {detailsError && <p className="rounded-xl bg-rose-50 p-4 text-sm font-medium text-rose-700">{detailsError.message}</p>}
+        {!detailsLoading && !detailsError && !detailRows.length && <Empty title="No matching records" message="There are no records in this category right now."/>}
+        {!detailsLoading && !detailsError && detailRows.length > 0 && <div className="divide-y divide-[var(--border)] overflow-hidden rounded-xl border border-[var(--border)]">{detailRows.map((row) => { const content = <><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{row.title}</p><p className="mt-1 text-xs text-[var(--muted)]">{row.subtitle}</p></div>{row.amount !== undefined && <b className={row.amount < 0 ? "text-rose-600" : "text-emerald-600"}>{money(row.amount)}</b>}<ArrowUpRight size={16} className="shrink-0 text-[var(--muted)]"/></>; return row.to ? <Link key={row.id} to={row.to} className="flex items-center gap-3 p-4 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/20">{content}</Link> : <div key={row.id} className="flex items-center gap-3 p-4">{content}</div>; })}</div>}
+      </Modal>
     </>
   );
 }

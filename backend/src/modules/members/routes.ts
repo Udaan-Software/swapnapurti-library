@@ -21,8 +21,13 @@ function financialSummary(member: { payments: { amount: Prisma.Decimal; refunds:
 }
 
 membersRouter.get("/", asyncHandler(async (req, res) => {
-  const { page, pageSize, skip } = pageParams(req); const search = String(req.query.search ?? "").trim();
-  const where = { ...(search ? { OR: [{ fullName: { contains: search, mode: "insensitive" as const } }, { publicId: { contains: search, mode: "insensitive" as const } }, { mobile: { contains: search } }] } : {}), ...(req.query.status ? { status: req.query.status as RecordStatus } : {}), ...(req.query.type ? { type: req.query.type as MemberType } : {}) };
+  const { page, pageSize, skip } = pageParams(req);
+  const query = z.object({ search: z.string().optional(), status: z.nativeEnum(RecordStatus).optional(), type: z.nativeEnum(MemberType).optional(), registeredFrom: z.string().date().optional(), registeredTo: z.string().date().optional() }).parse(req.query);
+  const search = query.search?.trim() ?? "";
+  const registeredFrom = query.registeredFrom ? new Date(`${query.registeredFrom}T00:00:00.000Z`) : undefined;
+  const registeredTo = query.registeredTo ? new Date(`${query.registeredTo}T00:00:00.000Z`) : undefined;
+  if (registeredTo) registeredTo.setUTCDate(registeredTo.getUTCDate() + 1);
+  const where = { ...(search ? { OR: [{ fullName: { contains: search, mode: "insensitive" as const } }, { publicId: { contains: search, mode: "insensitive" as const } }, { mobile: { contains: search } }] } : {}), ...(query.status ? { status: query.status } : {}), ...(query.type ? { type: query.type } : {}), ...((registeredFrom || registeredTo) ? { registrationDate: { ...(registeredFrom ? { gte: registeredFrom } : {}), ...(registeredTo ? { lt: registeredTo } : {}) } } : {}) };
   const [items, total] = await prisma.$transaction([prisma.member.findMany({ where, skip, take: pageSize, orderBy: { createdAt: "desc" }, include: { subscriptions: { where: { status: "ACTIVE" }, include: { plan: true }, orderBy: { endDate: "desc" }, take: 1 }, payments: { select: { amount: true, refunds: { select: { amount: true } } } }, invoices: { where: { status: { in: ["ISSUED", "PARTIAL"] } }, select: { total: true, paid: true } }, fines: { where: { status: { in: ["UNPAID", "PARTIAL"] } }, select: { amount: true, paidAmount: true } } } }), prisma.member.count({ where })]);
   ok(res, items.map(({ payments, invoices, fines, ...member }) => ({ ...member, financialSummary: financialSummary({ payments, invoices, fines }) })), { page, pageSize, total, pages: Math.ceil(total / pageSize) });
 }));
